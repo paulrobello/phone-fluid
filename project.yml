@@ -21,6 +21,7 @@ targets:
       - path: PhoneFluid
         excludes:
           - "Support/Info.plist"
+          - "Resources/Audio-PROVENANCE.md"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.paulrobello.PhoneFluid

@@ -111,6 +111,7 @@ final class Renderer: NSObject {
     if appliedPreset != settings.presetID {
       appliedPreset = settings.presetID
       sim.preset = settings.preset
+      audio.setPreset(settings.preset)
       wake()
     }
     if appliedFill != settings.fill {
@@ -148,6 +149,7 @@ final class Renderer: NSObject {
     do {
       let sim = try FluidSimulation(device: device, library: library, geometry: geometry)
       sim.preset = settings.preset
+      audio.setPreset(settings.preset)
       sim.useGather = !launch.scatterP2G
       sim.reset(fill: settings.fill, down: lastGravity)
       simulation = sim
@@ -442,7 +444,7 @@ final class Renderer: NSObject {
       centroidDrift = simd_distance(centroid, oldest.centroid) / Float(time - oldest.time)
     }
     haptics.update(impact: impact, time: time)
-    audio.update(kinetic: kinetic, impact: impact)
+    audio.update(kinetic: kinetic, impact: impact, time: time)
   }
 
   private func makeUniforms(sim: FluidSimulation, viewport: CGSize, time: Double) -> RenderUniforms
