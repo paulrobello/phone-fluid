@@ -166,7 +166,8 @@ final class FluidRenderer {
 
   func encode(
     commandBuffer: MTLCommandBuffer, target: MTLTexture, uniforms: RenderUniforms,
-    particles: MTLBuffer, foam: MTLBuffer, density: MTLBuffer, particleCount: Int
+    particles: MTLBuffer, foam: MTLBuffer, density: MTLBuffer, particleCount: Int,
+    smoothing: Float = 1
   ) {
     ensureTextures(for: CGSize(width: target.width, height: target.height))
     guard let scene = sceneTexture, let depth = depthTexture, let zbuf = depthBuffer,
@@ -257,11 +258,18 @@ final class FluidRenderer {
         let group = MTLSize(width: w, height: h, depth: 1)
         // Blur across roughly one and a half particle radii, in fluid-buffer pixels.
         let pxPerMM = Float(depth.width) / max(uniforms.boxMax.x - uniforms.boxMin.x, 1)
-        let radius = Int32(min(max(Int(uniforms.particleRadiusMM * pxPerMM * 1.8), 6), 32))
-        // One dense separable pair: sparse (strided) taps stair-stepped the silhouette.
-        let passes: [(MTLTexture, MTLTexture, SIMD2<Int32>)] = [
+        let radius = Int32(
+          min(max(Int(uniforms.particleRadiusMM * pxPerMM * 1.8 * smoothing), 6), 48))
+        // Dense separable pairs (sparse taps stair-stepped the silhouette); creamy liquids get a
+        // second pair.
+        var passes: [(MTLTexture, MTLTexture, SIMD2<Int32>)] = [
           (depth, smoothA, [1, 0]), (smoothA, smoothB, [0, 1]),
         ]
+        if smoothing > 1.5 {
+          passes += [
+            (smoothB, smoothA, SIMD2<Int32>(1, 0)), (smoothA, smoothB, SIMD2<Int32>(0, 1)),
+          ]
+        }
         for (src, dst, dir) in passes {
           var sp = SmoothParams(
             direction: dir, radius: radius, depthFalloff: uniforms.particleRadiusMM * 3)

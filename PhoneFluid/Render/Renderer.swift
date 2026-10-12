@@ -483,6 +483,7 @@ final class Renderer: NSObject {
     u.causticStrength = preset.causticStrength
     u.activity = activity
     u.restDensity = preset.restDensity
+    u.opaqueSoftness = min(max(preset.surfaceSmoothing - 1, 0), 1)
     u.ripplePhase = ripplePhase
     u.simOrigin = SIMD4<Float>(geo.simOrigin, 0)
     return u

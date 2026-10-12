@@ -77,6 +77,7 @@ typedef struct {
     float activity;     // 0 at rest ... 1 sloshing; scales animated surface effects
     float ripplePhase;  // accumulated time × activity, drives ripples and caustics
     float restDensity;  // particles per cell at rest (sprite growth for sparse liquid)
+    float opaqueSoftness;  // 0..1 wrap lighting for opaque bodies (hides particle bumps)
     simd_float4 simOrigin;  // world mm position of sim cell (0,0,0)
 } RenderUniforms;
 

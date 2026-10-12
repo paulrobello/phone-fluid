@@ -38,6 +38,9 @@ struct FluidPreset: Identifiable, Equatable, Sendable {
   var emission: SIMD3<Float> = .zero
   var emissionStrength: Float = 0
   var causticStrength: Float = 1
+  /// Screen-space surface smoothing multiplier (opaque, creamy liquids hide nothing behind
+  /// them, so particle bumps must be smoothed harder).
+  var surfaceSmoothing: Float = 1
   /// Particle speed (cells / sim time) above which foam starts to appear.
   var foamSpeed: Float = 0.65
 
@@ -82,8 +85,8 @@ struct FluidPreset: Identifiable, Equatable, Sendable {
   static let milk = FluidPreset(
     id: "milk", name: "Milk",
     viscosity: 0.45, drag: 0.5,
-    absorption: [0.8, 0.8, 0.8], tint: [0.97, 0.96, 0.92], opacity: 0.92, refraction: 0,
-    reflectivity: 0.03, roughness: 0.15, foam: 0.6, causticStrength: 0)
+    absorption: [0.8, 0.8, 0.8], tint: [0.9, 0.89, 0.85], opacity: 0.94, refraction: 0,
+    reflectivity: 0.03, roughness: 0.6, foam: 0.15, causticStrength: 0, surfaceSmoothing: 2.2)
 
   static let all: [FluidPreset] = [water, ocean, honey, oil, mercury, lava, slime, milk]
 

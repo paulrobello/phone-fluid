@@ -457,7 +457,10 @@ fragment float4 compositeFragment(FullscreenOut in [[stage_in]],
     float scatterAmount = (1.0f - exp(-0.12f * thickness)) * (1.0f - u.tint.w);
     transmitted += scatterTint * scatterAmount * (u.ambientColor.rgb * 0.22f + u.lightColor.rgb * 0.18f);
     // Opaque liquids (milk, lava) show a diffuse body instead of what is behind them.
-    float diffuse = saturate(dot(N, L)) * 0.6f + 0.4f;
+    float lambert = saturate(dot(N, L)) * 0.6f + 0.4f;
+    // Creamy liquids scatter light internally: wrap lighting hides the particle-scale bumps.
+    float wrapped = saturate((dot(N, L) + 1.0f) / 2.0f) * 0.5f + 0.45f;
+    float diffuse = mix(lambert, wrapped, u.opaqueSoftness);
     float3 body = u.tint.rgb * (u.ambientColor.rgb * 0.6f + u.lightColor.rgb * diffuse * 0.7f);
     transmitted = mix(transmitted, body, u.tint.w);
 
