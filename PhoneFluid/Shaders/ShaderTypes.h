@@ -36,6 +36,7 @@ typedef struct {
     float drag;           // fraction of grid velocity removed per step
     float foamSpeed;      // particle speed where whitewater starts to form
     float foamDecay;      // per-step foam retention
+    uint32_t countCells;  // g2p bins particles for the next substep (gather path)
     uint32_t touchCount;
     TouchInput touches[MAX_TOUCHES];
 } SimParams;

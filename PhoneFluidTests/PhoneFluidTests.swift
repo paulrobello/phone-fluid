@@ -213,12 +213,20 @@ struct SimulationTests {
     let g = simd_normalize(SIMD3<Float>(0.7, -1, 0.2))
     try run(a, steps: 5, gravity: g)
     try run(b, steps: 5, gravity: g)
+    // The gather path reorders particles by cell, so compare order-independent statistics:
+    // sorted per-axis position and velocity distributions.
     let pa = particles(a)
     let pb = particles(b)
+    #expect(pa.count == pb.count)
     var worst: Float = 0
-    for i in 0..<pa.count {
-      worst = max(worst, simd_distance(pa[i].position, pb[i].position))
-      worst = max(worst, simd_distance(pa[i].velocity, pb[i].velocity))
+    for axis in 0..<3 {
+      let xa = pa.map { $0.position[axis] }.sorted()
+      let xb = pb.map { $0.position[axis] }.sorted()
+      let va = pa.map { $0.velocity[axis] }.sorted()
+      let vb = pb.map { $0.velocity[axis] }.sorted()
+      for i in 0..<xa.count {
+        worst = max(worst, abs(xa[i] - xb[i]), abs(va[i] - vb[i]))
+      }
     }
     #expect(worst < 1e-3, "max divergence \(worst)")
   }

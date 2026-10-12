@@ -11,6 +11,11 @@ inline uint gridIndex(int3 c, uint3 size) {
     return uint(c.x) + uint(c.y) * size.x + uint(c.z) * size.x * size.y;
 }
 
+inline uint cellOf(float3 pos, uint3 size) {
+    int3 c = int3(floor(pos));
+    return gridIndex(c, size);
+}
+
 inline void bsplineWeights(float3 d, thread float3 w[3]) {
     w[0] = 0.5f * (0.5f - d) * (0.5f - d);
     w[1] = 0.75f - d * d;
@@ -109,18 +114,10 @@ kernel void p2g2(device const Particle *particles [[buffer(0)]],
     }
 }
 
-kernel void updateGrid(device const float4 *grid [[buffer(0)]],
-                       device float4 *gridVel [[buffer(1)]],
-                       constant SimParams &p [[buffer(2)]],
-                       uint id [[thread_position_in_grid]]) {
+/// Grid velocity update shared by both P2G paths: momentum → velocity, gravity, touch forces,
+/// free-slip walls and a speed clamp.
+inline float3 gridNodeVelocity(float4 node, uint id, constant SimParams &p) {
     uint3 size = p.gridSize;
-    uint count = size.x * size.y * size.z;
-    if (id >= count) return;
-    float4 node = grid[id];
-    if (node.x <= 0.0f) {
-        gridVel[id] = float4(0.0f);
-        return;
-    }
     float3 v = node.yzw / node.x * (1.0f - p.drag);
     v += p.gravity * p.dt;
 
@@ -158,6 +155,22 @@ kernel void updateGrid(device const float4 *grid [[buffer(0)]],
 
     float speed = length(v);
     if (speed > p.maxSpeed) v *= p.maxSpeed / speed;
+    return v;
+}
+
+kernel void updateGrid(device const float4 *grid [[buffer(0)]],
+                       device float4 *gridVel [[buffer(1)]],
+                       constant SimParams &p [[buffer(2)]],
+                       uint id [[thread_position_in_grid]]) {
+    uint3 size = p.gridSize;
+    uint count = size.x * size.y * size.z;
+    if (id >= count) return;
+    float4 node = grid[id];
+    if (node.x <= 0.0f) {
+        gridVel[id] = float4(0.0f);
+        return;
+    }
+    float3 v = gridNodeVelocity(node, id, p);
     gridVel[id] = float4(v, node.x);
 }
 
@@ -168,6 +181,8 @@ kernel void g2p(device Particle *particles [[buffer(0)]],
                 device atomic<uint> *statsBits [[buffer(4)]],
                 device const float *densities [[buffer(5)]],
                 device float *foam [[buffer(6)]],
+                device atomic_uint *cellCounts [[buffer(7)]],
+                device uint *rank [[buffer(8)]],
                 uint id [[thread_position_in_grid]]) {
     if (id >= p.particleCount) return;
     Particle pt = particles[id];
@@ -220,7 +235,13 @@ kernel void g2p(device Particle *particles [[buffer(0)]],
     float fast = smoothstep(p.foamSpeed, p.foamSpeed * 2.0f, speed);
     float hit = saturate(length(push) * 1.5f) * smoothstep(p.foamSpeed * 0.5f, p.foamSpeed * 1.5f, speed);
     float generated = saturate(fast * (0.05f + surface) + spray * fast + hit);
-    foam[id] = saturate(foam[id] * p.foamDecay + generated * 0.04f);
+    // Generation per step scales with (1 - decay) so foam builds at the same real-time rate.
+    foam[id] = saturate(foam[id] * p.foamDecay + generated * (1.0f - p.foamDecay) * 40.0f);
+
+    if (p.countCells != 0) {
+        rank[id] = atomic_fetch_add_explicit(&cellCounts[cellOf(pos, p.gridSize)], 1u,
+                                             memory_order_relaxed);
+    }
 
     pt.position = pos;
     pt.velocity = v;
@@ -245,16 +266,20 @@ kernel void g2p(device Particle *particles [[buffer(0)]],
 // node then gathers from the particles in the 27 cells whose stencils reach it, so P2G needs no
 // float atomics (heavily contended on tiled GPUs when neighbouring threads share nodes).
 
+/// Quadratic B-spline as a function of node–particle distance (cells).
+inline float bspline(float r) {
+    r = abs(r);
+    if (r < 0.5f) return 0.75f - r * r;
+    if (r < 1.5f) return 0.5f * (1.5f - r) * (1.5f - r);
+    return 0.0f;
+}
+
 inline float bweight(float d, int g) {
     if (g == 0) return 0.5f * (0.5f - d) * (0.5f - d);
     if (g == 1) return 0.75f - d * d;
     return 0.5f * (0.5f + d) * (0.5f + d);
 }
 
-inline uint cellOf(float3 pos, uint3 size) {
-    int3 c = int3(floor(pos));
-    return gridIndex(c, size);
-}
 
 kernel void clearCounts(device uint *counts [[buffer(0)]],
                         constant SimParams &p [[buffer(1)]],
@@ -275,7 +300,7 @@ kernel void countParticles(device const Particle *particles [[buffer(0)]],
 
 /// Exclusive prefix sum of the cell counts. Dispatched as a single threadgroup (up to 1024
 /// threads, a multiple of 32), each thread scanning a contiguous chunk.
-kernel void scanCounts(device const uint *counts [[buffer(0)]],
+kernel void scanCounts(device uint *counts [[buffer(0)]],
                        device uint *starts [[buffer(1)]],
                        constant SimParams &p [[buffer(2)]],
                        uint tid [[thread_index_in_threadgroup]],
@@ -304,24 +329,30 @@ kernel void scanCounts(device const uint *counts [[buffer(0)]],
     for (uint i = begin; i < end; i++) {
         starts[i] = offset;
         offset += counts[i];
+        counts[i] = 0;  // ready for the next count in g2p
     }
+    if (end == n && begin < end) starts[n] = offset;
+    if (n == 0 && tid == 0) starts[0] = 0;
 }
 
-kernel void scatterIndices(device const Particle *particles [[buffer(0)]],
-                           device const uint *rank [[buffer(1)]],
-                           device const uint *starts [[buffer(2)]],
-                           device uint *sorted [[buffer(3)]],
-                           constant SimParams &p [[buffer(4)]],
-                           uint id [[thread_position_in_grid]]) {
+/// Physically reorders particles (and their foam) by cell so the gathers read contiguous memory.
+kernel void reorderParticles(device const Particle *src [[buffer(0)]],
+                             device const uint *rank [[buffer(1)]],
+                             device const uint *starts [[buffer(2)]],
+                             device Particle *dst [[buffer(3)]],
+                             constant SimParams &p [[buffer(4)]],
+                             device const float *srcFoam [[buffer(5)]],
+                             device float *dstFoam [[buffer(6)]],
+                             uint id [[thread_position_in_grid]]) {
     if (id >= p.particleCount) return;
-    uint c = cellOf(particles[id].position, p.gridSize);
-    sorted[starts[c] + rank[id]] = id;
+    Particle pt = src[id];
+    uint slot = starts[cellOf(pt.position, p.gridSize)] + rank[id];
+    dst[slot] = pt;
+    dstFoam[slot] = srcFoam[id];
 }
 
 kernel void p2gGatherMass(device const Particle *particles [[buffer(0)]],
                           device const uint *starts [[buffer(1)]],
-                          device const uint *counts [[buffer(2)]],
-                          device const uint *sorted [[buffer(3)]],
                           device float4 *grid [[buffer(4)]],
                           constant SimParams &p [[buffer(5)]],
                           uint id [[thread_position_in_grid]]) {
@@ -330,23 +361,24 @@ kernel void p2gGatherMass(device const Particle *particles [[buffer(0)]],
     int3 n = int3(id % size.x, (id / size.x) % size.y, id / (size.x * size.y));
     float3 nodePos = float3(n) + 0.5f;
     float4 acc = float4(0.0f);
+    // Cells along x are contiguous after the reorder, so each (y, z) row of three cells is one
+    // contiguous run of particles.
+    int x0 = max(n.x - 1, 0);
+    int x1 = min(n.x + 1, int(size.x) - 1);
     for (int dz = -1; dz <= 1; dz++) {
+        int bz = n.z + dz;
+        if (bz < 0 || bz >= int(size.z)) continue;
         for (int dy = -1; dy <= 1; dy++) {
-            for (int dx = -1; dx <= 1; dx++) {
-                int3 b = n + int3(dx, dy, dz);
-                if (any(b < 0) || any(b >= int3(size))) continue;
-                uint ci = gridIndex(b, size);
-                uint s = starts[ci];
-                uint e = s + counts[ci];
-                int3 g = n - b + 1;
-                for (uint k = s; k < e; k++) {
-                    Particle pt = particles[sorted[k]];
-                    float3 d = pt.position - float3(b) - 0.5f;
-                    float w = bweight(d.x, g.x) * bweight(d.y, g.y) * bweight(d.z, g.z);
-                    float3 dist = nodePos - pt.position;
-                    float3x3 C = float3x3(pt.c0, pt.c1, pt.c2);
-                    acc += float4(w, w * (pt.velocity + C * dist));
-                }
+            int by = n.y + dy;
+            if (by < 0 || by >= int(size.y)) continue;
+            uint s = starts[gridIndex(int3(x0, by, bz), size)];
+            uint e = starts[gridIndex(int3(x1, by, bz), size) + 1];
+            for (uint k = s; k < e; k++) {
+                Particle pt = particles[k];
+                float3 dist = nodePos - pt.position;
+                float w = bspline(dist.x) * bspline(dist.y) * bspline(dist.z);
+                float3x3 C = float3x3(pt.c0, pt.c1, pt.c2);
+                acc += float4(w, w * (pt.velocity + C * dist));
             }
         }
     }
@@ -389,39 +421,41 @@ kernel void particleStress(device const Particle *particles [[buffer(0)]],
     terms[id] = (-volume * kAPIC * p.dt) * stress;
 }
 
+/// Adds the stress momentum to each node and applies the grid update in the same pass.
 kernel void p2gGatherStress(device const Particle *particles [[buffer(0)]],
                             device const uint *starts [[buffer(1)]],
-                            device const uint *counts [[buffer(2)]],
-                            device const uint *sorted [[buffer(3)]],
-                            device float4 *grid [[buffer(4)]],
+                            device float4 *gridVel [[buffer(2)]],
+                              device const float4 *grid [[buffer(4)]],
                             constant SimParams &p [[buffer(5)]],
                             device const float3x3 *terms [[buffer(6)]],
                             uint id [[thread_position_in_grid]]) {
     uint3 size = p.gridSize;
     if (id >= size.x * size.y * size.z) return;
     float4 node = grid[id];
-    if (node.x <= 0.0f) return;
+    if (node.x <= 0.0f) {
+        gridVel[id] = float4(0.0f);
+        return;
+    }
     int3 n = int3(id % size.x, (id / size.x) % size.y, id / (size.x * size.y));
     float3 nodePos = float3(n) + 0.5f;
     float3 acc = float3(0.0f);
+    int x0 = max(n.x - 1, 0);
+    int x1 = min(n.x + 1, int(size.x) - 1);
     for (int dz = -1; dz <= 1; dz++) {
+        int bz = n.z + dz;
+        if (bz < 0 || bz >= int(size.z)) continue;
         for (int dy = -1; dy <= 1; dy++) {
-            for (int dx = -1; dx <= 1; dx++) {
-                int3 b = n + int3(dx, dy, dz);
-                if (any(b < 0) || any(b >= int3(size))) continue;
-                uint ci = gridIndex(b, size);
-                uint s = starts[ci];
-                uint e = s + counts[ci];
-                int3 g = n - b + 1;
-                for (uint k = s; k < e; k++) {
-                    uint pi = sorted[k];
-                    float3 pos = particles[pi].position;
-                    float3 d = pos - float3(b) - 0.5f;
-                    float w = bweight(d.x, g.x) * bweight(d.y, g.y) * bweight(d.z, g.z);
-                    acc += w * (terms[pi] * (nodePos - pos));
-                }
+            int by = n.y + dy;
+            if (by < 0 || by >= int(size.y)) continue;
+            uint s = starts[gridIndex(int3(x0, by, bz), size)];
+            uint e = starts[gridIndex(int3(x1, by, bz), size) + 1];
+            for (uint k = s; k < e; k++) {
+                float3 dist = nodePos - particles[k].position;
+                float w = bspline(dist.x) * bspline(dist.y) * bspline(dist.z);
+                acc += w * (terms[k] * dist);
             }
         }
     }
-    grid[id] = float4(node.x, node.yzw + acc);
+    node.yzw += acc;
+    gridVel[id] = float4(gridNodeVelocity(node, id, p), node.x);
 }

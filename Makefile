@@ -1,4 +1,4 @@
-.PHONY: project setup-sim build test lint fmt typecheck checkall run-sim screenshot run-phone  checkall-ci build-phone pre-commit pre-commit-update clean
+.PHONY: bench project setup-sim build test lint fmt typecheck checkall run-sim screenshot run-phone  checkall-ci build-phone pre-commit pre-commit-update clean
 
 APP_NAME ?= PhoneFluid
 SCHEME ?= PhoneFluid
@@ -94,6 +94,9 @@ run-phone: project  ## Build, install, and launch on the connected iPhone (by na
 	xcodebuild build -scheme $(SCHEME) -destination '$(PHONE_DESTINATION)' -allowProvisioningUpdates -quiet DEVELOPMENT_TEAM=$(TEAM_ID)
 	xcrun devicectl device install app --device "$(PHONE_DEVICE)" "$$(ls -td "$(DERIVED_DATA)"/$(APP_NAME)-*/Build/Products/Debug-iphoneos/$(APP_NAME).app | head -1)"
 	xcrun devicectl device process launch --device "$(PHONE_DEVICE)" --terminate-existing $(BUNDLE_ID)
+
+bench:  ## Benchmark simulation kernels on this Mac's GPU (relative costs)
+	tools/bench/run.sh $(BENCH_CELLS)
 
 pre-commit:  ## Run all pre-commit hooks against the whole tree
 	pre-commit run --all-files

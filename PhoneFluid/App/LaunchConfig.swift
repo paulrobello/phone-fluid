@@ -19,6 +19,8 @@ struct LaunchConfig: Sendable {
   var maxSteps: Int?
   /// Overrides the perspective mode (`tilt` or `face`).
   var perspective: String?
+  /// Overrides the quality's cell size in mm (profiling).
+  var cellMM: Float?
 
   static let current = LaunchConfig(environment: ProcessInfo.processInfo.environment)
 
@@ -34,6 +36,7 @@ struct LaunchConfig: Sendable {
     scatterP2G = Self.flag(env["FLUID_SCATTER"])
     maxSteps = env["FLUID_MAX_STEPS"].flatMap { Int($0) }
     perspective = Self.nonEmpty(env["FLUID_PERSPECTIVE"])
+    cellMM = env["FLUID_CELL_MM"].flatMap { Float($0) }
   }
 
   var needsReadableDrawable: Bool { screenshotAfter != nil }

@@ -119,7 +119,7 @@ final class Renderer: NSObject {
   private func rebuildSimulation() {
     let geometry = TankGeometry(
       screenPoints: SIMD2<Float>(Float(screenPoints.width), Float(screenPoints.height)),
-      quality: settings.quality)
+      quality: settings.quality, cellOverrideMM: launch.cellMM)
     do {
       let sim = try FluidSimulation(device: device, library: library, geometry: geometry)
       sim.preset = settings.preset
@@ -186,7 +186,7 @@ final class Renderer: NSObject {
     }
 
     // Simulation steps for this frame (fixed sim dt; the step rate sets the speed).
-    let stepsPerSecond = sim.preset.stepsPerSecond
+    let stepsPerSecond = sim.stepsPerSecond
     stepAccumulator += stepsPerSecond * Float(dt)
     var steps = Int(stepAccumulator)
     stepAccumulator -= Float(steps)
@@ -196,7 +196,7 @@ final class Renderer: NSObject {
     lastSteps = steps
     sim.touches = touches.inputs(
       screenSize: screenPoints, geometry: sim.geometry,
-      simTimePerSecond: stepsPerSecond * FluidSimulation.simDt,
+      simTimePerSecond: stepsPerSecond * sim.dt,
       extraSplash: shakeBoost * 2)
     if shakeBoost > 0 { addShakeSplashes(sim) }
     shakeBoost = 0
@@ -402,6 +402,7 @@ final class Renderer: NSObject {
       "particles": simulation?.activeCount ?? 0,
       "stepsPerFrame": lastSteps,
       "msPerStep": msPerStep,
+      "cellMM": simulation?.geometry.cellMM ?? 0,
       "targetFPS": targetFPS,
       "quality": settings.quality.rawValue,
       "preset": settings.presetID,

@@ -34,8 +34,11 @@ struct TankGeometry: Equatable, Sendable {
   /// Interior cells per axis.
   let interior: SIMD3<Int>
 
-  init(widthMM: Float, heightMM: Float, depthMM: Float = 24, quality: SimQuality) {
-    let nx = max(8, Int((widthMM / quality.cellMM).rounded()))
+  init(
+    widthMM: Float, heightMM: Float, depthMM: Float = 24, quality: SimQuality,
+    cellOverrideMM: Float? = nil
+  ) {
+    let nx = max(8, Int((widthMM / (cellOverrideMM ?? quality.cellMM)).rounded()))
     let cell = widthMM / Float(nx)
     let ny = max(8, Int((heightMM / cell).rounded()))
     let nz = max(4, Int((depthMM / cell).rounded()))
@@ -46,11 +49,11 @@ struct TankGeometry: Equatable, Sendable {
     self.interior = [nx, ny, nz]
   }
 
-  init(screenPoints: SIMD2<Float>, quality: SimQuality) {
+  init(screenPoints: SIMD2<Float>, quality: SimQuality, cellOverrideMM: Float? = nil) {
     self.init(
       widthMM: screenPoints.x * Self.mmPerPoint,
       heightMM: screenPoints.y * Self.mmPerPoint,
-      quality: quality)
+      quality: quality, cellOverrideMM: cellOverrideMM)
   }
 
   var gridSize: SIMD3<UInt32> {

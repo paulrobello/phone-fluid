@@ -14,16 +14,29 @@ final class FluidSimulation {
   /// The weakly compressible liquid settles ~15% denser than seeded; seed extra so the visible
   /// fill level matches the setting.
   static let compressionAllowance: Float = 1.15
-  static let simDt: Float = 0.2
-  /// Sim gravity magnitude for 1 g (cells / sim time^2).
-  static let gravityUnit: Float = 0.04
+  /// Presets were tuned at this cell size, time step and gravity. Other resolutions scale
+  /// gravity (∝ cell size, keeping compression constant) and step rate (∝ 1 / cell size) so
+  /// the liquid moves at the same physical speed at every quality.
+  static let referenceCellMM: Float = 2.6
+  static let referenceDt: Float = 0.2
+  /// Largest sim time step; limited by the acoustic CFL condition (c·dt ≈ 0.65 cells).
+  static let maxDt: Float = 0.4
+  /// Sim gravity magnitude for 1 g at the reference cell size (cells / sim time^2).
+  static let referenceGravity: Float = 0.04
 
   let device: MTLDevice
   let geometry: TankGeometry
   let capacity: Int
   private(set) var activeCount: Int = 0
 
-  let particleBuffer: MTLBuffer
+  /// Particles and foam are ping-ponged: the gather path reorders them by cell every substep.
+  private let particleBuffers: [MTLBuffer]
+  private let foamBuffers: [MTLBuffer]
+  private var current = 0
+  /// The buffer holding the latest particle state (CPU writes and rendering use this).
+  var particleBuffer: MTLBuffer { particleBuffers[current] }
+  /// Per-particle whitewater amount 0...1, read by the renderer.
+  var foamBuffer: MTLBuffer { foamBuffers[current] }
   let gridBuffer: MTLBuffer
   let gridVelocityBuffer: MTLBuffer
 
@@ -35,7 +48,7 @@ final class FluidSimulation {
   private let clearCountsPipeline: MTLComputePipelineState
   private let countPipeline: MTLComputePipelineState
   private let scanPipeline: MTLComputePipelineState
-  private let scatterIndicesPipeline: MTLComputePipelineState
+  private let reorderPipeline: MTLComputePipelineState
   private let gatherMassPipeline: MTLComputePipelineState
   private let stressPipeline: MTLComputePipelineState
   private let gatherStressPipeline: MTLComputePipelineState
@@ -43,11 +56,8 @@ final class FluidSimulation {
   private let cellCountBuffer: MTLBuffer
   private let cellStartBuffer: MTLBuffer
   private let rankBuffer: MTLBuffer
-  private let sortedBuffer: MTLBuffer
   private let termBuffer: MTLBuffer
   private let densityBuffer: MTLBuffer
-  /// Per-particle whitewater amount 0...1, read by the renderer.
-  let foamBuffer: MTLBuffer
 
   /// Atomic-free P2G (counting sort + per-node gather) instead of float-atomic scatter.
   var useGather = true
@@ -68,7 +78,9 @@ final class FluidSimulation {
     capacity = Int(interiorVolume * perCell * Self.maxFill) + 1024
 
     guard
-      let particles = device.makeBuffer(
+      let particlesA = device.makeBuffer(
+        length: capacity * MemoryLayout<Particle>.stride, options: .storageModeShared),
+      let particlesB = device.makeBuffer(
         length: capacity * MemoryLayout<Particle>.stride, options: .storageModeShared),
       let grid = device.makeBuffer(
         length: geometry.nodeCount * MemoryLayout<SIMD4<Float>>.stride,
@@ -82,28 +94,29 @@ final class FluidSimulation {
       let counts = device.makeBuffer(
         length: geometry.nodeCount * uintSize, options: .storageModePrivate),
       let starts = device.makeBuffer(
-        length: geometry.nodeCount * uintSize, options: .storageModePrivate),
+        length: (geometry.nodeCount + 1) * uintSize, options: .storageModePrivate),
       let rank = device.makeBuffer(length: capacity * uintSize, options: .storageModePrivate),
-      let sorted = device.makeBuffer(length: capacity * uintSize, options: .storageModePrivate),
       let terms = device.makeBuffer(
         length: capacity * MemoryLayout<simd_float3x3>.stride, options: .storageModePrivate),
       let densities = device.makeBuffer(
         length: capacity * MemoryLayout<Float>.stride, options: .storageModePrivate),
-      let foam = device.makeBuffer(
+      let foamA = device.makeBuffer(
+        length: capacity * MemoryLayout<Float>.stride, options: .storageModeShared),
+      let foamB = device.makeBuffer(
         length: capacity * MemoryLayout<Float>.stride, options: .storageModeShared)
     else { throw SimulationError.allocationFailed }
     densityBuffer = densities
-    foamBuffer = foam
-    memset(foam.contents(), 0, foam.length)
+    foamBuffers = [foamA, foamB]
+    for buffer in foamBuffers { memset(buffer.contents(), 0, buffer.length) }
     cellCountBuffer = counts
     cellStartBuffer = starts
     rankBuffer = rank
-    sortedBuffer = sorted
     termBuffer = terms
-    particles.label = "particles"
+    particlesA.label = "particlesA"
+    particlesB.label = "particlesB"
     grid.label = "grid"
     gridVel.label = "gridVelocity"
-    particleBuffer = particles
+    particleBuffers = [particlesA, particlesB]
     gridBuffer = grid
     gridVelocityBuffer = gridVel
 
@@ -121,7 +134,7 @@ final class FluidSimulation {
     clearCountsPipeline = try pipeline("clearCounts")
     countPipeline = try pipeline("countParticles")
     scanPipeline = try pipeline("scanCounts")
-    scatterIndicesPipeline = try pipeline("scatterIndices")
+    reorderPipeline = try pipeline("reorderParticles")
     gatherMassPipeline = try pipeline("p2gGatherMass")
     stressPipeline = try pipeline("particleStress")
     gatherStressPipeline = try pipeline("p2gGatherStress")
@@ -223,7 +236,24 @@ final class FluidSimulation {
 
   /// Device-frame effective gravity (in g) → sim gravity.
   func simGravity(_ g: SIMD3<Float>) -> SIMD3<Float> {
-    g * Self.gravityUnit * preset.gravityScale
+    g * Self.referenceGravity * resolutionScale * preset.gravityScale
+  }
+
+  /// Cell size relative to the reference (< 1 for finer qualities).
+  var resolutionScale: Float { geometry.cellMM / Self.referenceCellMM }
+
+  /// Viscosity adjusted so physical (mm²/s) viscosity is the same at every resolution.
+  var effectiveViscosity: Float { preset.viscosity / resolutionScale }
+
+  /// Sim time step: as large as stability allows. Explicit viscosity needs ν·dt ≤ 0.15 cell².
+  var dt: Float {
+    let nu = effectiveViscosity / preset.restDensity
+    return min(Self.maxDt, nu > 0 ? 0.15 / nu : Self.maxDt)
+  }
+
+  /// Substeps per real second needed for real-time motion with the current time step.
+  var stepsPerSecond: Float {
+    preset.stepsPerSecond / resolutionScale * (Self.referenceDt / dt)
   }
 
   func makeParams(gravity: SIMD3<Float>) -> SimParams {
@@ -231,19 +261,21 @@ final class FluidSimulation {
     params.gridSize = geometry.gridSize
     params.particleCount = UInt32(activeCount)
     params.gravity = simGravity(gravity)
-    params.dt = Self.simDt
+    params.dt = dt
     params.restDensity = preset.restDensity
     params.stiffness = preset.stiffness
     params.eosPower = preset.eosPower
-    params.viscosity = preset.viscosity
+    params.viscosity = effectiveViscosity
     params.cohesion = preset.cohesion
     params.wallMargin = Float(TankGeometry.wallMargin)
-    params.maxSpeed = 3.0
+    // At most ~0.75 cells of travel per step.
+    params.maxSpeed = 0.75 / dt
     params.wallStiffness = wallStiffness
     params.affineDamping = affineDamping
     params.drag = drag
     params.foamSpeed = preset.foamSpeed
-    params.foamDecay = 0.999
+    // Foam half-life ~0.6 s of real time regardless of step rate.
+    params.foamDecay = pow(0.5, 1 / (0.6 * stepsPerSecond))
     let count = min(touches.count, Int(MAX_TOUCHES))
     params.touchCount = UInt32(count)
     withUnsafeMutableBytes(of: &params.touches) { raw in
@@ -260,11 +292,28 @@ final class FluidSimulation {
   ) {
     guard activeCount > 0, steps > 0 else { return }
     var params = makeParams(gravity: gravity)
+    params.countCells = useGather ? 1 : 0
     guard let enc = commandBuffer.makeComputeCommandEncoder() else { return }
     enc.label = "MLS-MPM"
     let nodes = geometry.nodeCount
     let particles = activeCount
     let paramSize = MemoryLayout<SimParams>.stride
+
+    // Gather path: bin particles once per frame; afterwards g2p bins them for the next substep
+    // and the prefix scan clears the counts again.
+    if useGather {
+      enc.setComputePipelineState(clearCountsPipeline)
+      enc.setBuffer(cellCountBuffer, offset: 0, index: 0)
+      enc.setBytes(&params, length: paramSize, index: 1)
+      dispatch(enc, clearCountsPipeline, count: nodes)
+
+      enc.setComputePipelineState(countPipeline)
+      enc.setBuffer(particleBuffer, offset: 0, index: 0)
+      enc.setBuffer(cellCountBuffer, offset: 0, index: 1)
+      enc.setBuffer(rankBuffer, offset: 0, index: 2)
+      enc.setBytes(&params, length: paramSize, index: 3)
+      dispatch(enc, countPipeline, count: particles)
+    }
 
     for step in 0..<steps {
       // Touch splashes are one-shot impulses; apply them on the first substep only.
@@ -291,13 +340,13 @@ final class FluidSimulation {
         enc.setComputePipelineState(p2g2Pipeline)
         enc.setBuffer(densityBuffer, offset: 0, index: 3)
         dispatch(enc, p2g2Pipeline, count: particles)
-      }
 
-      enc.setComputePipelineState(updateGridPipeline)
-      enc.setBuffer(gridBuffer, offset: 0, index: 0)
-      enc.setBuffer(gridVelocityBuffer, offset: 0, index: 1)
-      enc.setBytes(&params, length: paramSize, index: 2)
-      dispatch(enc, updateGridPipeline, count: nodes)
+        enc.setComputePipelineState(updateGridPipeline)
+        enc.setBuffer(gridBuffer, offset: 0, index: 0)
+        enc.setBuffer(gridVelocityBuffer, offset: 0, index: 1)
+        enc.setBytes(&params, length: paramSize, index: 2)
+        dispatch(enc, updateGridPipeline, count: nodes)
+      }
 
       enc.setComputePipelineState(g2pPipeline)
       enc.setBuffer(particleBuffer, offset: 0, index: 0)
@@ -307,27 +356,20 @@ final class FluidSimulation {
       enc.setBuffer(statsBuffer, offset: statsOffset, index: 4)
       enc.setBuffer(densityBuffer, offset: 0, index: 5)
       enc.setBuffer(foamBuffer, offset: 0, index: 6)
+      enc.setBuffer(cellCountBuffer, offset: 0, index: 7)
+      enc.setBuffer(rankBuffer, offset: 0, index: 8)
       dispatch(enc, g2pPipeline, count: particles)
     }
     enc.endEncoding()
   }
 
+  /// Scan (also clears counts) → reorder particles by cell → gather mass/momentum → per-particle stress →
+  /// gather stress fused with the grid update. Requires counts and ranks from the previous g2p
+  /// (or the per-frame count pass).
   private func encodeGatherP2G(
     _ enc: MTLComputeCommandEncoder, params: inout SimParams, nodes: Int, particles: Int
   ) {
     let paramSize = MemoryLayout<SimParams>.stride
-
-    enc.setComputePipelineState(clearCountsPipeline)
-    enc.setBuffer(cellCountBuffer, offset: 0, index: 0)
-    enc.setBytes(&params, length: paramSize, index: 1)
-    dispatch(enc, clearCountsPipeline, count: nodes)
-
-    enc.setComputePipelineState(countPipeline)
-    enc.setBuffer(particleBuffer, offset: 0, index: 0)
-    enc.setBuffer(cellCountBuffer, offset: 0, index: 1)
-    enc.setBuffer(rankBuffer, offset: 0, index: 2)
-    enc.setBytes(&params, length: paramSize, index: 3)
-    dispatch(enc, countPipeline, count: particles)
 
     enc.setComputePipelineState(scanPipeline)
     enc.setBuffer(cellCountBuffer, offset: 0, index: 0)
@@ -337,19 +379,21 @@ final class FluidSimulation {
       MTLSize(width: 1, height: 1, depth: 1),
       threadsPerThreadgroup: MTLSize(width: scanThreads, height: 1, depth: 1))
 
-    enc.setComputePipelineState(scatterIndicesPipeline)
-    enc.setBuffer(particleBuffer, offset: 0, index: 0)
+    let src = current
+    current = 1 - current
+    enc.setComputePipelineState(reorderPipeline)
+    enc.setBuffer(particleBuffers[src], offset: 0, index: 0)
     enc.setBuffer(rankBuffer, offset: 0, index: 1)
     enc.setBuffer(cellStartBuffer, offset: 0, index: 2)
-    enc.setBuffer(sortedBuffer, offset: 0, index: 3)
+    enc.setBuffer(particleBuffer, offset: 0, index: 3)
     enc.setBytes(&params, length: paramSize, index: 4)
-    dispatch(enc, scatterIndicesPipeline, count: particles)
+    enc.setBuffer(foamBuffers[src], offset: 0, index: 5)
+    enc.setBuffer(foamBuffer, offset: 0, index: 6)
+    dispatch(enc, reorderPipeline, count: particles)
 
     enc.setComputePipelineState(gatherMassPipeline)
     enc.setBuffer(particleBuffer, offset: 0, index: 0)
     enc.setBuffer(cellStartBuffer, offset: 0, index: 1)
-    enc.setBuffer(cellCountBuffer, offset: 0, index: 2)
-    enc.setBuffer(sortedBuffer, offset: 0, index: 3)
     enc.setBuffer(gridBuffer, offset: 0, index: 4)
     enc.setBytes(&params, length: paramSize, index: 5)
     dispatch(enc, gatherMassPipeline, count: nodes)
@@ -365,8 +409,7 @@ final class FluidSimulation {
     enc.setComputePipelineState(gatherStressPipeline)
     enc.setBuffer(particleBuffer, offset: 0, index: 0)
     enc.setBuffer(cellStartBuffer, offset: 0, index: 1)
-    enc.setBuffer(cellCountBuffer, offset: 0, index: 2)
-    enc.setBuffer(sortedBuffer, offset: 0, index: 3)
+    enc.setBuffer(gridVelocityBuffer, offset: 0, index: 2)
     enc.setBuffer(gridBuffer, offset: 0, index: 4)
     enc.setBytes(&params, length: paramSize, index: 5)
     enc.setBuffer(termBuffer, offset: 0, index: 6)
