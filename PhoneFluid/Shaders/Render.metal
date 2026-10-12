@@ -87,10 +87,9 @@ inline float3 backdropAlbedo(float3 p, int wall, constant RenderUniforms &u,
             float frost = valueNoise(float3(c * 0.9f, 1.7f)) * 0.06f;
             return base - frost;
         }
-        case 2: {  // user photo on the back wall, edge pixels stretched along the sides
+        case 2: {  // user photo on the back wall (side walls are glass, see shadeWall)
             float2 uv = float2((p.x - bmin.x) / (bmax.x - bmin.x), 1.0f - (p.y - bmin.y) / (bmax.y - bmin.y));
-            float3 col = photo.sample(s, clamp(uv, 0.001f, 0.999f)).rgb;
-            return wall == 0 ? col : col * 0.7f;
+            return photo.sample(s, clamp(uv, 0.001f, 0.999f)).rgb;
         }
         case 3: {  // dark void
             float g = (p.y - bmin.y) / (bmax.y - bmin.y);
@@ -104,8 +103,59 @@ inline float3 backdropAlbedo(float3 p, int wall, constant RenderUniforms &u,
     }
 }
 
+/// The room seen through a glass tank: an out-of-focus interior (floor, wall, ceiling bands with
+/// soft warm light blobs). It shifts with the viewing direction, so it parallaxes behind the tank.
+inline float3 roomBehindGlass(float3 dir, constant RenderUniforms &u) {
+    float up = dir.y;
+    float3 floorColor = float3(0.16f, 0.12f, 0.09f);
+    float3 wallColor = float3(0.34f, 0.31f, 0.27f);
+    float3 ceilingColor = float3(0.62f, 0.64f, 0.66f);
+    float3 room = mix(floorColor, wallColor, smoothstep(-0.55f, 0.0f, up));
+    room = mix(room, ceilingColor, smoothstep(0.15f, 0.75f, up));
+    // Defocused lamps and windows: soft blobs at a few scales.
+    float2 q = dir.xy / max(abs(dir.z), 0.25f) * 14.0f;
+    float warm = smoothstep(0.6f, 0.92f, valueNoise(float3(q, 3.1f)));
+    float warmSmall = smoothstep(0.72f, 0.95f, valueNoise(float3(q * 2.3f, 8.7f)));
+    float cool = smoothstep(0.66f, 0.95f, valueNoise(float3(q * 0.7f + 7.0f, 1.3f)));
+    room += float3(1.0f, 0.78f, 0.5f) * (warm * 0.45f + warmSmall * 0.35f);
+    room += float3(0.55f, 0.75f, 1.0f) * cool * 0.3f;
+    return room * (u.ambientColor.rgb * 0.8f + 0.2f);
+}
+
+/// Clear glass walls: see-through tint that deepens at grazing angles, Fresnel reflection, bright
+/// edges where the thick panes meet, and faint streaks that slide with the viewpoint.
+inline float3 shadeGlassWall(float3 p, int wall, constant RenderUniforms &u) {
+    float3 dir = normalize(p - u.eyeWorld.xyz);
+    float3 n = wallNormal(wall);
+    float cosT = abs(dot(dir, n));
+    float3 tint = mix(float3(0.92f, 0.99f, 0.97f), float3(0.55f, 0.80f, 0.74f), (1.0f - cosT) * 0.7f);
+    float3 color = roomBehindGlass(dir, u) * tint;
+
+    float fresnel = 0.04f + 0.96f * pow(1.0f - cosT, 5.0f);
+    color = mix(color, environment(reflect(dir, n), u) * 0.85f, fresnel * 0.55f);
+
+    float3 bmin = u.boxMin.xyz;
+    float3 bmax = u.boxMax.xyz;
+    float d = 1e6f;
+    if (wall != 1) d = min(d, p.x - bmin.x);
+    if (wall != 2) d = min(d, bmax.x - p.x);
+    if (wall != 3) d = min(d, p.y - bmin.y);
+    if (wall != 4) d = min(d, bmax.y - p.y);
+    if (wall != 0) d = min(d, p.z - bmin.z);
+    float edge = 1.0f - smoothstep(0.0f, 1.8f, d);
+    color += float3(0.45f, 0.85f, 0.75f) * edge * (u.lightColor.rgb * 0.7f + 0.15f);
+
+    float2 c = wallCoords(p, wall);
+    float streak = sin(c.x * 0.09f + c.y * 0.05f - u.eyeWorld.x * 0.01f) * 0.5f + 0.5f;
+    color += u.lightColor.rgb * pow(streak, 40.0f) * 0.06f;
+    return color;
+}
+
 inline float3 shadeWall(float3 p, int wall, constant RenderUniforms &u,
                         texture2d<float> photo, sampler s) {
+    // Glass tank, and the side walls of the photo backdrop (stretching the photo's edge pixels
+    // along the depth streaked them up the walls).
+    if (u.backdrop == 1 || (u.backdrop == 2 && wall != 0)) return shadeGlassWall(p, wall, u);
     float3 albedo = backdropAlbedo(p, wall, u, photo, s);
     float3 n = wallNormal(wall);
     float3 L = normalize(u.lightDirWorld.xyz);
@@ -342,7 +392,14 @@ fragment float4 compositeFragment(FullscreenOut in [[stage_in]],
     float foam = smoothstep(0.08f, 0.45f, foamFraction) * saturate(u.material.w);
 
     // Transmission: refract into the liquid and shade the wall the ray lands on.
-    float3 refr = refract(-V, N, 1.0f / 1.33f);
+    // The front of the liquid lies flat against the glass, which barely bends the view; drifting
+    // ripples in the refraction normal make the background visibly swim through the water.
+    float rippleTime = u.time * 0.9f;
+    float3 rp = worldPos * 0.22f;
+    float2 ripple = float2(valueNoise(rp + float3(0.0f, rippleTime, 0.0f)),
+                           valueNoise(rp + float3(5.2f, -rippleTime * 0.8f, 1.3f))) - 0.5f;
+    float3 Nr = normalize(N + float3(ripple * 0.55f, 0.0f));
+    float3 refr = refract(-V, Nr, 1.0f / 1.45f);
     float bend = u.absorption.w;
     float3 tdir = normalize(mix(-V, refr, bend));
     int wall;

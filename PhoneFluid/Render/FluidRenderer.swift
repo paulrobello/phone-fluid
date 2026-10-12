@@ -154,9 +154,8 @@ final class FluidRenderer {
     depthBuffer = make(.depth32Float, fw, fh, [.renderTarget], "fluidZ")
     smoothA = make(.r32Float, fw, fh, [.shaderRead, .shaderWrite], "smoothA")
     smoothB = make(.r32Float, fw, fh, [.shaderRead, .shaderWrite], "smoothB")
-    // Thickness and foam are soft by nature; a quarter-resolution buffer is plenty.
-    thicknessTexture = make(
-      .rgba16Float, max(fw / 2, 1), max(fh / 2, 1), [.renderTarget, .shaderRead], "thickness")
+    // Quarter resolution stair-stepped the silhouette (thickness drives the edge alpha).
+    thicknessTexture = make(.rgba16Float, fw, fh, [.renderTarget, .shaderRead], "thickness")
   }
 
   func encode(
@@ -240,7 +239,7 @@ final class FluidRenderer {
         enc.endEncoding()
       }
 
-      // 4. Bilateral smoothing, two separable passes, twice.
+      // 4. Bilateral smoothing.
       if let enc = commandBuffer.makeComputeCommandEncoder() {
         enc.label = "Smooth depth"
         enc.setComputePipelineState(smoothPipeline)
@@ -250,17 +249,14 @@ final class FluidRenderer {
         let group = MTLSize(width: w, height: h, depth: 1)
         // Blur across roughly one and a half particle radii, in fluid-buffer pixels.
         let pxPerMM = Float(depth.width) / max(uniforms.boxMax.x - uniforms.boxMin.x, 1)
-        let radius = Int32(min(max(Int(uniforms.particleRadiusMM * pxPerMM * 1.5), 6), 28))
+        let radius = Int32(min(max(Int(uniforms.particleRadiusMM * pxPerMM * 1.8), 6), 32))
+        // One dense separable pair: sparse (strided) taps stair-stepped the silhouette.
         let passes: [(MTLTexture, MTLTexture, SIMD2<Int32>)] = [
           (depth, smoothA, [1, 0]), (smoothA, smoothB, [0, 1]),
-          (smoothB, smoothA, [1, 0]), (smoothA, smoothB, [0, 1]),
         ]
-        // Wide blurs are sampled sparsely: at most ~15 taps per pass.
-        let stride = max(1, radius / 7)
         for (src, dst, dir) in passes {
           var sp = SmoothParams(
-            direction: dir &* stride, radius: radius / stride,
-            depthFalloff: uniforms.particleRadiusMM * 3)
+            direction: dir, radius: radius, depthFalloff: uniforms.particleRadiusMM * 3)
           enc.setTexture(src, index: 0)
           enc.setTexture(dst, index: 1)
           enc.setBytes(&sp, length: MemoryLayout<SmoothParams>.stride, index: 0)
