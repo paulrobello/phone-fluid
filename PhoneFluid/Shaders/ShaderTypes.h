@@ -31,6 +31,9 @@ typedef struct {
     float cohesion;  // allowed negative pressure as a fraction of stiffness
     float wallMargin;
     float maxSpeed;
+    float wallStiffness;  // soft wall push strength in g2p
+    float affineDamping;  // scales the APIC affine matrix C each step (1 = none)
+    float drag;           // fraction of grid velocity removed per step
     uint32_t touchCount;
     TouchInput touches[MAX_TOUCHES];
 } SimParams;

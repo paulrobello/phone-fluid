@@ -10,6 +10,7 @@ final class MotionController {
   private let sweep: Bool
   private var sweepTime: Double = 0
   private var lastShake: Double = 0
+  private var filteredUser = SIMD3<Float>.zero
 
   /// Most recent attitude (device → reference frame), identity when unavailable.
   private(set) var attitude = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
@@ -63,6 +64,11 @@ final class MotionController {
     let user = SIMD3<Float>(
       Float(motion.userAcceleration.x), Float(motion.userAcceleration.y),
       Float(motion.userAcceleration.z))
+    // Low-pass and dead-zone the user acceleration so hand tremor doesn't stir the liquid.
+    filteredUser += (user - filteredUser) * 0.35
+    let tremor: Float = 0.04
+    let mag = simd_length(filteredUser)
+    let calmed = mag > tremor ? filteredUser * ((mag - tremor) / mag) : .zero
     let jolt = simd_length(user)
     var shook = false
     if jolt > Self.shakeThreshold, time - lastShake > 0.35 {

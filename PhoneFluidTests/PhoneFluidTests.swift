@@ -181,8 +181,8 @@ struct SimulationTests {
     try run(sim, steps: 2000, gravity: [0, -1, 0])
     let ps = particles(sim)
     let top = ps.map(\.position.y).sorted()[Int(Double(ps.count) * 0.98)]
-    // Incompressible-ish: the surface should stay near its seeded height.
-    #expect(top > top0 * 0.8, "top0=\(top0) top=\(top) ")
+    // Weakly compressible: the surface settles within ~25% of its seeded height.
+    #expect(top > top0 * 0.75, "top0=\(top0) top=\(top) ")
     #expect(top < top0 * 1.15)
   }
 
@@ -243,5 +243,24 @@ struct SimulationTests {
         "gather=\(gather) n=\(sim.activeCount) ms/step=\((cb.gpuEndTime - cb.gpuStartTime) * 10) "
     }
     print("PERF \(report)")
+  }
+
+  @Test func restingSurfaceIsCalm() throws {
+    let device = try #require(MTLCreateSystemDefaultDevice())
+    let library = try #require(device.makeDefaultLibrary())
+    let geometry = TankGeometry(widthMM: 72, heightMM: 158, depthMM: 24, quality: .low)
+    let sim = try FluidSimulation(device: device, library: library, geometry: geometry)
+    sim.reset(fill: 0.4, down: [0, -1, 0])
+    var samples: [Float] = []
+    for _ in 0..<8 {
+      try run(sim, steps: 800, gravity: [0, -1, 0])
+      let ps = particles(sim).sorted { $0.position.y < $1.position.y }
+      let n = ps.count / 20
+      samples.append(ps.suffix(n).map { abs($0.velocity.y) }.reduce(0, +) / Float(n))
+    }
+    print("CALM \(samples)")
+    let topVy = samples.last ?? 1
+    // Measured 0.13-0.18 with the old stiff EOS (visibly boiling surface), ~0.005 now.
+    #expect(topVy < 0.02, "surface vertical jitter \(topVy)")
   }
 }

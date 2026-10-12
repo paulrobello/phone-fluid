@@ -387,8 +387,8 @@ fragment float4 compositeFragment(FullscreenOut in [[stage_in]],
 
     // Up-facing free surface catches the light from above, like the bright band where a wave
     // meets the air in a real tank.
-    float surfaceBand = smoothstep(0.35f, 0.9f, N.y) * (1.0f - u.material.y);
-    color += (u.lightColor.rgb * 0.45f + u.ambientColor.rgb * 0.2f) * surfaceBand * mix(0.5f, 1.0f, u.material.w);
+    float surfaceBand = smoothstep(0.55f, 0.95f, N.y) * (1.0f - u.material.y);
+    color += (u.lightColor.rgb * 0.3f + u.ambientColor.rgb * 0.15f) * surfaceBand * mix(0.5f, 1.0f, u.material.w);
 
     // Lava: glowing core under a cooling crust.
     if (u.emission.w > 0.0f) {

@@ -244,7 +244,9 @@ final class FluidRenderer {
         let h = smoothPipeline.maxTotalThreadsPerThreadgroup / w
         let grid = MTLSize(width: depth.width, height: depth.height, depth: 1)
         let group = MTLSize(width: w, height: h, depth: 1)
-        let radius = Int32(max(6, Int(Float(depth.width) / 34)))
+        // Blur across roughly one and a half particle radii, in fluid-buffer pixels.
+        let pxPerMM = Float(depth.width) / max(uniforms.boxMax.x - uniforms.boxMin.x, 1)
+        let radius = Int32(min(max(Int(uniforms.particleRadiusMM * pxPerMM * 1.5), 6), 28))
         let passes: [(MTLTexture, MTLTexture, SIMD2<Int32>)] = [
           (depth, smoothA, [1, 0]), (smoothA, smoothB, [0, 1]),
           (smoothB, smoothA, [1, 0]), (smoothA, smoothB, [0, 1]),

@@ -7,10 +7,12 @@ struct FluidPreset: Identifiable, Equatable, Sendable {
 
   // Physics (sim units: dx = 1 cell, dt = 0.2 sim time).
   var restDensity: Float = 4
-  var stiffness: Float = 10
-  var eosPower: Float = 7
+  var stiffness: Float = 3
+  var eosPower: Float = 4
   var viscosity: Float = 0.35
-  var cohesion: Float = 0
+  /// Small cohesion keeps the free surface from boiling (pressure clamped at 0 lets surface
+  /// particles chatter between compression and free fall).
+  var cohesion: Float = 0.05
   /// Multiplier on device gravity (heavy liquids feel snappier).
   var gravityScale: Float = 1
   /// Sim steps per real second (higher = faster-moving liquid).
@@ -32,13 +34,13 @@ struct FluidPreset: Identifiable, Equatable, Sendable {
   var emissionStrength: Float = 0
   var causticStrength: Float = 1
   /// Particle speed (cells / sim time) above which foam starts to appear.
-  var foamSpeed: Float = 0.5
+  var foamSpeed: Float = 0.75
 
   static let water = FluidPreset(id: "water", name: "Water")
 
   static let ocean = FluidPreset(
     id: "ocean", name: "Ocean",
-    absorption: [0.16, 0.05, 0.025], tint: [0.55, 0.85, 1.0], foam: 1.4, foamSpeed: 0.4)
+    absorption: [0.16, 0.05, 0.025], tint: [0.55, 0.85, 1.0], foam: 1.4, foamSpeed: 0.6)
 
   static let honey = FluidPreset(
     id: "honey", name: "Honey",

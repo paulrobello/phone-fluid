@@ -119,7 +119,7 @@ kernel void updateGrid(device const float4 *grid [[buffer(0)]],
         gridVel[id] = float4(0.0f);
         return;
     }
-    float3 v = node.yzw / node.x;
+    float3 v = node.yzw / node.x * (1.0f - p.drag);
     v += p.gravity * p.dt;
 
     int3 c = int3(id % size.x, (id / size.x) % size.y, id / (size.x * size.y));
@@ -189,7 +189,7 @@ kernel void g2p(device Particle *particles [[buffer(0)]],
             }
         }
     }
-    float3x3 C = kAPIC * B;
+    float3x3 C = (kAPIC * p.affineDamping) * B;
 
     float3 size = float3(p.gridSize);
     float3 pos = pt.position + v * p.dt;
@@ -200,7 +200,7 @@ kernel void g2p(device Particle *particles [[buffer(0)]],
     float3 wallMax = size - p.wallMargin - 0.5f;
     float3 predicted = pos + v * p.dt * 3.0f;
     float3 push = max(wallMin - predicted, 0.0f) - max(predicted - wallMax, 0.0f);
-    v += 0.3f * push;
+    v += p.wallStiffness * push;
 
     float speed = length(v);
     if (speed > p.maxSpeed) {

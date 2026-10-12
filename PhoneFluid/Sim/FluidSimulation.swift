@@ -11,6 +11,9 @@ enum SimulationError: Error {
 final class FluidSimulation {
   static let seedSpacing: Float = 0.63
   static let maxFill: Float = 0.85
+  /// The weakly compressible liquid settles ~15% denser than seeded; seed extra so the visible
+  /// fill level matches the setting.
+  static let compressionAllowance: Float = 1.15
   static let simDt: Float = 0.2
   /// Sim gravity magnitude for 1 g (cells / sim time^2).
   static let gravityUnit: Float = 0.04
@@ -45,6 +48,9 @@ final class FluidSimulation {
 
   /// Atomic-free P2G (counting sort + per-node gather) instead of float-atomic scatter.
   var useGather = true
+  var wallStiffness: Float = 0.3
+  var affineDamping: Float = 1
+  var drag: Float = 0
   private let scanThreads: Int
 
   var preset: FluidPreset = .water
@@ -118,7 +124,8 @@ final class FluidSimulation {
   func particleCount(forFill fraction: Float) -> Int {
     let f = min(max(fraction, 0.02), Self.maxFill)
     let interiorVolume = Float(geometry.interior.x * geometry.interior.y * geometry.interior.z)
-    return min(capacity, Int(interiorVolume * f / pow(Self.seedSpacing, 3)))
+    return min(
+      capacity, Int(interiorVolume * f * Self.compressionAllowance / pow(Self.seedSpacing, 3)))
   }
 
   /// Fills the bottom of the tank (toward `down`, a device-frame direction) with a resting block
@@ -219,6 +226,9 @@ final class FluidSimulation {
     params.cohesion = preset.cohesion
     params.wallMargin = Float(TankGeometry.wallMargin)
     params.maxSpeed = 3.0
+    params.wallStiffness = wallStiffness
+    params.affineDamping = affineDamping
+    params.drag = drag
     let count = min(touches.count, Int(MAX_TOUCHES))
     params.touchCount = UInt32(count)
     withUnsafeMutableBytes(of: &params.touches) { raw in
