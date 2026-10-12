@@ -18,8 +18,8 @@ struct FluidPreset: Identifiable, Equatable, Sendable {
 
   // Look.
   /// Beer–Lambert absorption per mm of thickness, per RGB channel.
-  var absorption: SIMD3<Float> = [0.06, 0.02, 0.008]
-  var tint: SIMD3<Float> = [0.85, 0.95, 1.0]
+  var absorption: SIMD3<Float> = [0.085, 0.03, 0.012]
+  var tint: SIMD3<Float> = [0.8, 0.97, 1.0]
   /// Minimum opacity of the body (milk and mercury are opaque).
   var opacity: Float = 0
   var refraction: Float = 1
@@ -32,13 +32,13 @@ struct FluidPreset: Identifiable, Equatable, Sendable {
   var emissionStrength: Float = 0
   var causticStrength: Float = 1
   /// Particle speed (cells / sim time) above which foam starts to appear.
-  var foamSpeed: Float = 0.7
+  var foamSpeed: Float = 0.5
 
   static let water = FluidPreset(id: "water", name: "Water")
 
   static let ocean = FluidPreset(
     id: "ocean", name: "Ocean",
-    absorption: [0.16, 0.05, 0.025], tint: [0.55, 0.85, 1.0], foam: 1.4, foamSpeed: 0.55)
+    absorption: [0.16, 0.05, 0.025], tint: [0.55, 0.85, 1.0], foam: 1.4, foamSpeed: 0.4)
 
   static let honey = FluidPreset(
     id: "honey", name: "Honey",

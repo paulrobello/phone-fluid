@@ -68,8 +68,8 @@ compiler rejects it). Kernels per substep:
 Buffers are allocated at **max capacity**; `activeCount` drives dispatch. Fill level changes
 `activeCount` (spawn new particles as a pour near the top / drop the tail).
 
-Quality presets set cell size: Low 2.5 mm, Medium 2.0 mm (default), High 1.6 mm. Particles are
-seeded at 2×2×2 per cell. Substeps per frame: 4–8 depending on preset stiffness.
+Quality presets set cell size: Low 2.6 mm (default; the only preset that holds full simulation speed at 120 fps on iPhone 18 Pro Max), Medium 2.1 mm, High 1.7 mm. Particles are
+seeded at rest density (spacing 0.63 cells, about 4 per cell). The sim uses a fixed dt of 0.2 sim units with gravity 0.04 per g, stiffness 10 and Tait exponent 7; each preset sets steps per second (800–1300), giving about 10 substeps per 120 Hz frame.
 
 Gravity input = `(gravity − userAcceleration) × 9810 mm/s²` mapped to cells/s², times a
 per-preset `gravityScale` and a global `timeScale` (the real 7 cm tank is fast; tuned for feel).

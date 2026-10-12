@@ -337,7 +337,7 @@ fragment float4 compositeFragment(FullscreenOut in [[stage_in]],
     float fresnel = F0 + (1.0f - F0) * pow(1.0f - ndv, 5.0f);
 
     float thickness = thick.r;
-    float foam = saturate(thick.g * u.material.w * 0.8f);
+    float foam = saturate(thick.g * u.material.w * 1.4f);
 
     // Transmission: refract into the liquid and shade the wall the ray lands on.
     float3 refr = refract(-V, N, 1.0f / 1.33f);
@@ -357,6 +357,10 @@ fragment float4 compositeFragment(FullscreenOut in [[stage_in]],
     }
     float3 absorb = exp(-u.absorption.rgb * thickness);
     float3 transmitted = behind * absorb * u.tint.rgb;
+    // In-scattering: thick liquid glows in the colour it absorbs least.
+    float3 scatterTint = exp(-u.absorption.rgb * 12.0f);
+    float scatterAmount = (1.0f - exp(-0.12f * thickness)) * (1.0f - u.tint.w);
+    transmitted += scatterTint * scatterAmount * (u.ambientColor.rgb * 0.22f + u.lightColor.rgb * 0.18f);
     // Opaque liquids (milk, lava) show a diffuse body instead of what is behind them.
     float diffuse = saturate(dot(N, L)) * 0.6f + 0.4f;
     float3 body = u.tint.rgb * (u.ambientColor.rgb * 0.6f + u.lightColor.rgb * diffuse * 0.7f);
@@ -380,6 +384,11 @@ fragment float4 compositeFragment(FullscreenOut in [[stage_in]],
     float shininess = mix(900.0f, 40.0f, u.material.z);
     float spec = pow(saturate(dot(N, H)), shininess) * mix(4.0f, 1.0f, u.material.z);
     color += u.lightColor.rgb * spec;
+
+    // Up-facing free surface catches the light from above, like the bright band where a wave
+    // meets the air in a real tank.
+    float surfaceBand = smoothstep(0.35f, 0.9f, N.y) * (1.0f - u.material.y);
+    color += (u.lightColor.rgb * 0.45f + u.ambientColor.rgb * 0.2f) * surfaceBand * mix(0.5f, 1.0f, u.material.w);
 
     // Lava: glowing core under a cooling crust.
     if (u.emission.w > 0.0f) {
