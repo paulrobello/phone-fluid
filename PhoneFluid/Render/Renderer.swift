@@ -68,6 +68,8 @@ final class Renderer: NSObject {
   private var screenshotTaken = false
   private var lastSteps = 0
   private var faceHistory: [[String: Any]] = []
+  private var trace: [[String: Any]] = []
+  private var lastTraceTime: Double = 0
 
   init(device: MTLDevice, settings: AppSettings, launch: LaunchConfig = .current) throws {
     guard let queue = device.makeCommandQueue(), let library = device.makeDefaultLibrary(),
@@ -360,6 +362,7 @@ final class Renderer: NSObject {
 
   private func updatePerspective(dt: Float) {
     let gain = settings.parallax
+    defer { recordTrace() }
     let attitude = motion.hasAttitude ? motion.attitude : nil
     if settings.perspectiveMode == .face, let eye = faceTracker?.snapshot().eye {
       perspective.updateFace(faceEye: eye, attitude: attitude, dt: dt, gain: gain)
@@ -370,6 +373,29 @@ final class Renderer: NSObject {
     } else if motion.hasAttitude {
       perspective.updateTilt(attitude: motion.attitude, dt: dt, gain: gain * 1.4)
     }
+  }
+
+  /// 10 Hz ring buffer of the perspective pipeline, written with stats.json (diagnostics).
+  private func recordTrace() {
+    guard launch.writeStats else { return }
+    let now = CACurrentMediaTime()
+    guard now - lastTraceTime >= 0.1 else { return }
+    lastTraceTime = now
+    let face = faceTracker?.snapshot()
+    let q = motion.attitude.vector
+    func r(_ v: Float) -> Double { (Double(v) * 10).rounded() / 10 }
+    var entry: [String: Any] = [
+      "t": ((now - startTime) * 100).rounded() / 100,
+      "tracked": face?.eye != nil,
+      "eye": [r(perspective.eye.x), r(perspective.eye.y), r(perspective.eye.z)],
+      "att": [q.x, q.y, q.z, q.w].map { (Double($0) * 1000).rounded() / 1000 },
+      "asleep": asleep,
+      "hasAtt": motion.hasAttitude,
+    ]
+    if let e = face?.eye { entry["face"] = [r(e.x), r(e.y), r(e.z)] }
+    if let f = face { entry["arT"] = (f.timestamp * 100).rounded() / 100 }
+    trace.append(entry)
+    if trace.count > 400 { trace.removeFirst(trace.count - 400) }
   }
 
   private func consumeStats(_ stats: FrameStats, steps: Int, time: Double) {
@@ -467,6 +493,7 @@ final class Renderer: NSObject {
       "hasAttitude": motion.hasAttitude,
       "mode": settings.perspectiveMode.rawValue,
       "faceHistory": faceHistory,
+      "trace": trace,
       "thermal": ProcessInfo.processInfo.thermalState.rawValue,
       "particles": simulation?.activeCount ?? 0,
       "stepsPerFrame": lastSteps,

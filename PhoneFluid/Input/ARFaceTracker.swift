@@ -38,6 +38,10 @@ final class ARFaceTracker: NSObject, ARSessionDelegate, @unchecked Sendable {
   private let state = Mutex(FaceState())
   private let diagnostics = Mutex(FaceDiagnostics())
   private(set) var running = false
+  /// Touched only on the ARKit delegate queue.
+  private var lastFaceTransform = matrix_identity_float4x4
+  private var frozenFrames = 0
+  static let frozenFrameLimit = 3
 
   override init() {
     super.init()
@@ -91,7 +95,15 @@ final class ARFaceTracker: NSObject, ARSessionDelegate, @unchecked Sendable {
   func session(_ session: ARSession, didUpdate frame: ARFrame) {
     let view = frame.camera.viewMatrix(for: .portrait)
     var update = FaceState(timestamp: frame.timestamp)
-    if let face = frame.anchors.compactMap({ $0 as? ARFaceAnchor }).first, face.isTracked {
+    // ARKit can keep reporting a face as tracked while its pose stops updating (seen on device
+    // when tilting the phone takes the face out of view); a live face never repeats its pose
+    // exactly, so a frozen transform counts as lost.
+    let anchor = frame.anchors.compactMap({ $0 as? ARFaceAnchor }).first
+    if let anchor {
+      frozenFrames = anchor.transform == lastFaceTransform ? frozenFrames + 1 : 0
+      lastFaceTransform = anchor.transform
+    }
+    if let face = anchor, face.isTracked, frozenFrames < Self.frozenFrameLimit {
       // Midpoint between the eyes, in face space, then into portrait camera view space.
       let l = face.leftEyeTransform.columns.3
       let r = face.rightEyeTransform.columns.3
@@ -124,11 +136,23 @@ final class ARFaceTracker: NSObject, ARSessionDelegate, @unchecked Sendable {
       }
     }
     state.withLock { current in
-      let keepEye = update.eye == nil && frame.timestamp - current.timestamp < 0.05
-      let previousEye = current.eye
-      current = update
-      if keepEye { current.eye = previousEye }
+      current = Self.merge(current: current, update: update, frameTime: frame.timestamp)
     }
+  }
+
+  /// Bridges single dropped frames only. The hold is measured from the last frame that had a
+  /// face, not the last frame: frames arrive every 16 ms, so measuring from the last frame held
+  /// a stale pose forever (the "view freezes when tilting" bug).
+  static func merge(current: FaceState, update: FaceState, frameTime: Double) -> FaceState {
+    if update.eye != nil { return update }
+    var merged = update
+    if let eye = current.eye, frameTime - current.timestamp < 0.05 {
+      merged.eye = eye
+      merged.timestamp = current.timestamp
+    } else {
+      merged.timestamp = frameTime
+    }
+    return merged
   }
 
   /// Portrait camera view space (metres, camera looks down -z, the user is in front) → device

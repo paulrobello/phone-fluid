@@ -61,6 +61,23 @@ struct InputTests {
     #expect(simd_length(SIMD2<Float>(far.x, far.y)) <= PerspectiveController.maxOffset + 1e-3)
   }
 
+  @Test func lostFaceIsReleasedAfterShortHold() {
+    var state = FaceState(eye: [10, 20, 300], timestamp: 1.0)
+    // Face disappears; frames keep arriving every 16 ms.
+    var heldFrames = 0
+    for i in 1...30 {
+      let t = 1.0 + Double(i) / 60
+      state = ARFaceTracker.merge(current: state, update: FaceState(timestamp: t), frameTime: t)
+      if state.eye != nil { heldFrames += 1 }
+    }
+    #expect(heldFrames <= 3, "stale pose held for \(heldFrames) frames")
+    #expect(state.eye == nil)
+    // A new face pose replaces the state immediately.
+    let back = ARFaceTracker.merge(
+      current: state, update: FaceState(eye: [1, 2, 3], timestamp: 2), frameTime: 2)
+    #expect(back.eye == SIMD3<Float>(1, 2, 3))
+  }
+
   @Test @MainActor func lostFacePredictionFollowsDeviceRotation() {
     let q0 = simd_quatf(angle: 0.1, axis: [1, 0, 0])
     let eye = SIMD3<Float>(20, -10, 300)
