@@ -419,7 +419,7 @@ final class FluidSimulation {
   private func dispatch(
     _ enc: MTLComputeCommandEncoder, _ pipeline: MTLComputePipelineState, count: Int
   ) {
-    let width = min(pipeline.maxTotalThreadsPerThreadgroup, 256)
+    let width = min(pipeline.maxTotalThreadsPerThreadgroup, 64)
     enc.dispatchThreads(
       MTLSize(width: count, height: 1, depth: 1),
       threadsPerThreadgroup: MTLSize(width: width, height: 1, depth: 1))
