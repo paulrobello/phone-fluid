@@ -50,6 +50,18 @@ final class Renderer: NSObject {
   private var msPerStep: Double = 0.4
   private var targetFPS = 120
   private var stepCap = maxStepsPerFrame
+  /// Resting RMS particle speed floors measured 0.04-0.065 (interior reshuffling); visible
+  /// sloshing is 0.15+.
+  static let sleepSpeed: Float = 0.085
+  static let sleepDelay: Double = 2.0
+  static let wakeGravityDelta: Float = 0.03
+  private(set) var asleep = false
+  private var calmSince: Double = 0
+  private var calmGravity = SIMD3<Float>(0, -1, 0)
+  private var sleepGravity = SIMD3<Float>(0, -1, 0)
+  private var recentRMSSpeed: Float = 1
+  private var lastEye = SIMD3<Float>.zero
+  private var slotSteps = [Int](repeating: 0, count: maxFramesInFlight)
   private var preferredFPS = 0
   private var capCheckTime: Double = 0
   private var lastStatsWrite: Double = 0
@@ -83,15 +95,18 @@ final class Renderer: NSObject {
     guard screenPoints.width > 0 else { return }
     if appliedQuality != settings.quality || simulation == nil {
       rebuildSimulation()
+      wake()
     }
     guard let sim = simulation else { return }
     if appliedPreset != settings.presetID {
       appliedPreset = settings.presetID
       sim.preset = settings.preset
+      wake()
     }
     if appliedFill != settings.fill {
       appliedFill = settings.fill
       sim.setFill(settings.fill, up: -lastGravity)
+      wake()
     }
     if appliedMode != settings.perspectiveMode {
       appliedMode = settings.perspectiveMode
@@ -136,6 +151,7 @@ final class Renderer: NSObject {
 
   func resetFluid() {
     simulation?.reset(fill: settings.fill, down: lastGravity)
+    wake()
   }
 
   func didBecomeActive() {
@@ -170,7 +186,7 @@ final class Renderer: NSObject {
       .bindMemory(to: FrameStats.self, capacity: 1)
     let stats = statsPtr.pointee
     statsPtr.pointee = FrameStats()
-    consumeStats(stats, time: now)
+    consumeStats(stats, steps: slotSteps[slot], time: now)
 
     // Inputs.
     let sample = motion.sample(time: now, dt: dt)
@@ -193,7 +209,11 @@ final class Renderer: NSObject {
     steps = min(
       steps,
       launch.maxSteps ?? affordableSteps(stepsPerSecond: stepsPerSecond, view: view, now: now))
+    updateSleep(gravity: sample.gravity, shook: sample.shook, now: now)
+    if asleep { steps = 0 }
+    view.preferredFramesPerSecond = displayFPS()
     lastSteps = steps
+    slotSteps[slot] = steps
     sim.touches = touches.inputs(
       screenSize: screenPoints, geometry: sim.geometry,
       simTimePerSecond: stepsPerSecond * sim.dt,
@@ -254,7 +274,11 @@ final class Renderer: NSObject {
   /// drops to 60 Hz with the simulation still at full speed; missing it at 60 Hz lowers the
   /// substep cap, so the liquid runs in slow motion instead of the display stuttering.
   private func affordableSteps(stepsPerSecond: Float, view: MTKView, now: Double) -> Int {
-    let preferred = settings.quality == .low && settings.perspectiveMode == .tilt ? 120 : 60
+    let hot =
+      ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue
+    let preferred =
+      settings.quality == .low && settings.perspectiveMode == .tilt && !hot
+        && !ProcessInfo.processInfo.isLowPowerModeEnabled ? 120 : 60
     if preferred != preferredFPS {
       preferredFPS = preferred
       targetFPS = preferred
@@ -262,9 +286,10 @@ final class Renderer: NSObject {
       capCheckTime = now
       frameTimes.removeAll()
     }
-    if view.preferredFramesPerSecond != targetFPS { view.preferredFramesPerSecond = targetFPS }
     let maxCap = Self.maxStepsPerFrame * 120 / targetFPS
-    if now - capCheckTime > 0.5, frameTimes.count >= 30 {
+    let thermal = ProcessInfo.processInfo.thermalState
+    if thermal == .critical { return 0 }
+    if !asleep, now - capCheckTime > 0.5, frameTimes.count >= 30 {
       capCheckTime = now
       let recent = frameTimes.suffix(30)
       let achieved = Double(recent.count) / recent.reduce(0, +)
@@ -280,7 +305,47 @@ final class Renderer: NSObject {
         stepCap = min(maxCap, stepCap + 1)
       }
     }
-    return stepCap
+    // A hot phone runs the liquid at half speed rather than heating further.
+    return hot ? max(2, min(stepCap, maxCap / 2)) : stepCap
+  }
+
+  // MARK: - Power
+
+  /// Settled liquid with no input stops simulating and the display drops to 30 Hz; tilting,
+  /// touching or shaking wakes it immediately.
+  private func updateSleep(gravity: SIMD3<Float>, shook: Bool, now: Double) {
+    let touching = touches.isActive
+    if asleep {
+      if shook || touching || simd_distance(gravity, sleepGravity) > Self.wakeGravityDelta {
+        wake(now: now)
+      }
+      return
+    }
+    if touching || shook || recentRMSSpeed > Self.sleepSpeed
+      || simd_distance(gravity, calmGravity) > Self.wakeGravityDelta
+    {
+      calmSince = now
+      calmGravity = gravity
+      return
+    }
+    if now - calmSince > Self.sleepDelay {
+      asleep = true
+      sleepGravity = gravity
+    }
+  }
+
+  func wake(now: Double = CACurrentMediaTime()) {
+    asleep = false
+    calmSince = now
+    frameTimes.removeAll()
+  }
+
+  private func displayFPS() -> Int {
+    guard asleep else { return targetFPS }
+    // Head tracking keeps the parallax smooth even while the liquid sleeps.
+    let eyeMoving = simd_distance(perspective.eye, lastEye) > 0.4
+    lastEye = perspective.eye
+    return eyeMoving && settings.perspectiveMode == .face ? 60 : 30
   }
 
   private func addShakeSplashes(_ sim: FluidSimulation) {
@@ -304,11 +369,12 @@ final class Renderer: NSObject {
     }
   }
 
-  private func consumeStats(_ stats: FrameStats, time: Double) {
-    guard let sim = simulation, sim.activeCount > 0, lastSteps > 0 else { return }
-    let n = Float(sim.activeCount * lastSteps)
+  private func consumeStats(_ stats: FrameStats, steps: Int, time: Double) {
+    guard let sim = simulation, sim.activeCount > 0, steps > 0 else { return }
+    let n = Float(sim.activeCount * steps)
     let kinetic = stats.kineticEnergy / n
     let impact = stats.impactEnergy / n
+    recentRMSSpeed = sqrt(max(kinetic, 0))
     haptics.update(impact: impact, time: time)
     audio.update(kinetic: kinetic, impact: impact)
   }
@@ -404,6 +470,8 @@ final class Renderer: NSObject {
       "msPerStep": msPerStep,
       "cellMM": simulation?.geometry.cellMM ?? 0,
       "targetFPS": targetFPS,
+      "asleep": asleep,
+      "rmsSpeed": recentRMSSpeed,
       "quality": settings.quality.rawValue,
       "preset": settings.presetID,
       "grid": simulation.map { g in

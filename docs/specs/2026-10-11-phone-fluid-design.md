@@ -127,6 +127,16 @@ Camera: off-axis (asymmetric) frustum from the eye position to the physical scre
 - Audio: `AVAudioEngine` + `AVAudioSourceNode` — filtered noise bed following smoothed kinetic
   energy, plus transient splash bursts from impacts. Respects the silent switch (ambient category).
 
+### Power (`Render/Renderer.swift`)
+
+- Rest sleep: when RMS particle speed stays below 0.085 cells/sim-time (resting floors measure
+  0.04–0.065) with no gravity change (>0.03 g), touch or shake for 2 s, the simulation stops and
+  the display drops to 30 Hz (60 Hz while head tracking moves the eye). Any input wakes it.
+- Thermal: at `.serious` (or Low Power Mode) the target is 60 Hz and substeps are halved (slow
+  motion); at `.critical` the simulation pauses.
+- Frame-rate controller: Low/tilt targets 120 Hz, otherwise 60 Hz; missing 120 drops to 60 at full
+  speed, missing 60 lowers the substep cap.
+
 ### UI (`UI/`)
 
 Full-screen Metal view, status bar and home indicator hidden, idle timer disabled. A translucent

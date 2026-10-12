@@ -46,6 +46,8 @@ final class TouchController {
 
   func cancelAll() { tracks.removeAll() }
 
+  var isActive: Bool { !tracks.isEmpty || !pendingSplashes.isEmpty }
+
   /// Builds this frame's GPU touch inputs. `screenSize` is in points.
   func inputs(
     screenSize: CGSize, geometry: TankGeometry, simTimePerSecond: Float, extraSplash: Float
