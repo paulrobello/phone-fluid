@@ -17,6 +17,11 @@ final class PerspectiveController {
 
   func recenter() { reference = nil }
 
+  var debugReference: [Float] {
+    guard let r = reference else { return [] }
+    return [r.vector.x, r.vector.y, r.vector.z, r.vector.w]
+  }
+
   func updateTilt(attitude: simd_quatf, dt: Float, gain: Float) {
     guard let ref = reference else {
       reference = attitude

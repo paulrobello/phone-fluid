@@ -15,6 +15,8 @@ struct LaunchConfig: Sendable {
   var writeStats = false
   /// Use the float-atomic scatter P2G instead of the gather path (A/B timing).
   var scatterP2G = false
+  /// Caps simulation substeps per frame (profiling).
+  var maxSteps: Int?
 
   static let current = LaunchConfig(environment: ProcessInfo.processInfo.environment)
 
@@ -28,6 +30,7 @@ struct LaunchConfig: Sendable {
     exitAfter = env["FLUID_EXIT_AFTER"].flatMap(TimeInterval.init)
     writeStats = Self.flag(env["FLUID_STATS"])
     scatterP2G = Self.flag(env["FLUID_SCATTER"])
+    maxSteps = env["FLUID_MAX_STEPS"].flatMap { Int($0) }
   }
 
   var needsReadableDrawable: Bool { screenshotAfter != nil }

@@ -65,7 +65,7 @@ final class AppSettings {
       defaults.string(forKey: "perspectiveMode").flatMap(PerspectiveMode.init) ?? .tilt
     fill = defaults.object(forKey: "fill") as? Float ?? 0.4
     quality =
-      (launch.quality ?? defaults.string(forKey: "quality")).flatMap(SimQuality.init) ?? .medium
+      (launch.quality ?? defaults.string(forKey: "quality")).flatMap(SimQuality.init) ?? .low
     hapticsEnabled = defaults.object(forKey: "haptics") as? Bool ?? true
     soundEnabled = defaults.object(forKey: "sound") as? Bool ?? true
     parallax = defaults.object(forKey: "parallax") as? Float ?? 1.0

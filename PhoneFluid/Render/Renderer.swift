@@ -183,7 +183,7 @@ final class Renderer: NSObject {
     stepAccumulator += stepsPerSecond * Float(dt)
     var steps = Int(stepAccumulator)
     stepAccumulator -= Float(steps)
-    steps = min(steps, Self.maxStepsPerFrame)
+    steps = min(steps, launch.maxSteps ?? Self.maxStepsPerFrame)
     lastSteps = steps
     sim.touches = touches.inputs(
       screenSize: screenPoints, geometry: sim.geometry,
@@ -331,6 +331,9 @@ final class Renderer: NSObject {
       "simMs": simMilliseconds,
       "gather": simulation?.useGather ?? false,
       "attitude": motion.debugAttitude,
+      "reference": perspective.debugReference,
+      "hasAttitude": motion.hasAttitude,
+      "mode": settings.perspectiveMode.rawValue,
       "particles": simulation?.activeCount ?? 0,
       "stepsPerFrame": lastSteps,
       "quality": settings.quality.rawValue,
