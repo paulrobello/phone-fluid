@@ -261,6 +261,14 @@ kernel void g2p(device Particle *particles [[buffer(0)]],
         atomic_fetch_add_explicit(&stats[1], impact, memory_order_relaxed);
         atomic_fetch_max_explicit(&statsBits[2], as_type<uint>(maxSpeed), memory_order_relaxed);
     }
+    if (p.sumPositions != 0) {
+        float3 sum = float3(simd_sum(pos.x), simd_sum(pos.y), simd_sum(pos.z));
+        if (simd_is_first()) {
+            atomic_fetch_add_explicit(&stats[4], sum.x, memory_order_relaxed);
+            atomic_fetch_add_explicit(&stats[5], sum.y, memory_order_relaxed);
+            atomic_fetch_add_explicit(&stats[6], sum.z, memory_order_relaxed);
+        }
+    }
 }
 
 // MARK: - Atomic-free gather path

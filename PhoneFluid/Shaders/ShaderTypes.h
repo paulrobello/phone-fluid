@@ -38,6 +38,7 @@ typedef struct {
     float foamSpeed;      // particle speed where whitewater starts to form
     float foamDecay;      // per-step foam retention
     uint32_t countCells;  // g2p bins particles for the next substep (gather path)
+    uint32_t sumPositions;  // g2p accumulates positionSum (last substep of a frame)
     uint32_t touchCount;
     TouchInput touches[MAX_TOUCHES];
 } SimParams;
@@ -48,6 +49,7 @@ typedef struct {
     float impactEnergy;
     float maxSpeed;
     float particleCount;
+    simd_float4 positionSum;  // xyz: sum of particle positions on the frame's last substep
 } FrameStats;
 
 typedef struct {

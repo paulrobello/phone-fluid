@@ -130,7 +130,8 @@ Camera: off-axis (asymmetric) frustum from the eye position to the physical scre
 ### Power (`Render/Renderer.swift`)
 
 - Rest sleep: when RMS particle speed stays below 0.085 cells/sim-time (resting floors measure
-  0.04–0.065) with no gravity change (>0.03 g), touch or shake for 2 s, the simulation stops and
+  0.04–0.065) and the centre of mass drifts under 0.08 cells/s (resting water 0.03–0.047; creeping
+  honey 0.2+) with no gravity change (>0.03 g), touch or shake for 2 s, the simulation stops and
   the display drops to 30 Hz (60 Hz while head tracking moves the eye). Any input wakes it.
 - Thermal: at `.serious` (or Low Power Mode) the target is 60 Hz and substeps are halved (slow
   motion); at `.critical` the simulation pauses.

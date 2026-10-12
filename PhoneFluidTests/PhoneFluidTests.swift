@@ -275,7 +275,8 @@ struct SimulationTests {
       sim.reset(fill: 0.4, down: [0, -1, 0])
       try run(sim, steps: 50, gravity: [0.5, -1, 0])
       let queue = try #require(device.makeCommandQueue())
-      let stats = try #require(device.makeBuffer(length: 16, options: .storageModeShared))
+      let stats = try #require(
+        device.makeBuffer(length: MemoryLayout<FrameStats>.stride, options: .storageModeShared))
       let cb = try #require(queue.makeCommandBuffer())
       sim.encode(into: cb, steps: 100, gravity: [0.5, -1, 0], statsBuffer: stats, statsOffset: 0)
       cb.commit()

@@ -60,6 +60,12 @@ final class Renderer: NSObject {
   private var calmGravity = SIMD3<Float>(0, -1, 0)
   private var sleepGravity = SIMD3<Float>(0, -1, 0)
   private var recentRMSSpeed: Float = 1
+  /// Bulk motion of the liquid (centre of mass, cells per real second). Particle jitter averages
+  /// out here, so slowly creeping honey still counts as moving.
+  private var centroidDrift: Float = 1
+  private var centroidHistory: [(time: Double, centroid: SIMD3<Float>)] = []
+  /// Resting water drifts 0.03-0.047 (residual sway); creeping honey measures 0.2+.
+  static let sleepDrift: Float = 0.08
   private var lastEye = SIMD3<Float>.zero
   private var slotSteps = [Int](repeating: 0, count: maxFramesInFlight)
   private var preferredFPS = 0
@@ -323,7 +329,7 @@ final class Renderer: NSObject {
       }
       return
     }
-    if touching || shook || recentRMSSpeed > Self.sleepSpeed
+    if touching || shook || recentRMSSpeed > Self.sleepSpeed || centroidDrift > Self.sleepDrift
       || simd_distance(gravity, calmGravity) > Self.wakeGravityDelta
     {
       calmSince = now
@@ -338,6 +344,8 @@ final class Renderer: NSObject {
 
   func wake(now: Double = CACurrentMediaTime()) {
     asleep = false
+    centroidDrift = 1
+    centroidHistory.removeAll()
     calmSince = now
     frameTimes.removeAll()
   }
@@ -404,6 +412,14 @@ final class Renderer: NSObject {
     let kinetic = stats.kineticEnergy / n
     let impact = stats.impactEnergy / n
     recentRMSSpeed = sqrt(max(kinetic, 0))
+    let centroid =
+      SIMD3<Float>(stats.positionSum.x, stats.positionSum.y, stats.positionSum.z)
+      / Float(sim.activeCount)
+    centroidHistory.append((time, centroid))
+    centroidHistory.removeAll { time - $0.time > 1.5 }
+    if let oldest = centroidHistory.first, time - oldest.time > 0.5 {
+      centroidDrift = simd_distance(centroid, oldest.centroid) / Float(time - oldest.time)
+    }
     haptics.update(impact: impact, time: time)
     audio.update(kinetic: kinetic, impact: impact)
   }
@@ -502,6 +518,7 @@ final class Renderer: NSObject {
       "targetFPS": targetFPS,
       "asleep": asleep,
       "rmsSpeed": recentRMSSpeed,
+      "centroidDrift": centroidDrift,
       "quality": settings.quality.rawValue,
       "preset": settings.presetID,
       "grid": simulation.map { g in

@@ -349,6 +349,7 @@ final class FluidSimulation {
         dispatch(enc, updateGridPipeline, count: nodes)
       }
 
+      params.sumPositions = step == steps - 1 ? 1 : 0
       enc.setComputePipelineState(g2pPipeline)
       enc.setBuffer(particleBuffer, offset: 0, index: 0)
       enc.setBuffer(gridVelocityBuffer, offset: 0, index: 1)
