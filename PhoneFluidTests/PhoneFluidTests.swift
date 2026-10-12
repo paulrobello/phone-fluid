@@ -196,4 +196,52 @@ struct SimulationTests {
     #expect(sim.activeCount > sim.particleCount(forFill: 0.1))
     #expect(sim.activeCount <= sim.capacity)
   }
+
+  @Test func gatherMatchesScatter() throws {
+    let a = try makeSim()
+    let b = try makeSim()
+    a.reset(fill: 0.3, down: [0, -1, 0])
+    memcpy(
+      b.particleBuffer.contents(), a.particleBuffer.contents(),
+      a.capacity * MemoryLayout<Particle>.stride)
+    b.reset(fill: 0.3, down: [0, -1, 0])
+    memcpy(
+      b.particleBuffer.contents(), a.particleBuffer.contents(),
+      a.capacity * MemoryLayout<Particle>.stride)
+    a.useGather = false
+    b.useGather = true
+    let g = simd_normalize(SIMD3<Float>(0.7, -1, 0.2))
+    try run(a, steps: 5, gravity: g)
+    try run(b, steps: 5, gravity: g)
+    let pa = particles(a)
+    let pb = particles(b)
+    var worst: Float = 0
+    for i in 0..<pa.count {
+      worst = max(worst, simd_distance(pa[i].position, pb[i].position))
+      worst = max(worst, simd_distance(pa[i].velocity, pb[i].velocity))
+    }
+    #expect(worst < 1e-3, "max divergence \(worst)")
+  }
+
+  @Test func timeScatterVersusGather() throws {
+    let device = try #require(MTLCreateSystemDefaultDevice())
+    let library = try #require(device.makeDefaultLibrary())
+    let geometry = TankGeometry(widthMM: 66, heightMM: 145, depthMM: 24, quality: .medium)
+    var report = ""
+    for gather in [false, true] {
+      let sim = try FluidSimulation(device: device, library: library, geometry: geometry)
+      sim.useGather = gather
+      sim.reset(fill: 0.4, down: [0, -1, 0])
+      try run(sim, steps: 50, gravity: [0.5, -1, 0])
+      let queue = try #require(device.makeCommandQueue())
+      let stats = try #require(device.makeBuffer(length: 16, options: .storageModeShared))
+      let cb = try #require(queue.makeCommandBuffer())
+      sim.encode(into: cb, steps: 100, gravity: [0.5, -1, 0], statsBuffer: stats, statsOffset: 0)
+      cb.commit()
+      cb.waitUntilCompleted()
+      report +=
+        "gather=\(gather) n=\(sim.activeCount) ms/step=\((cb.gpuEndTime - cb.gpuStartTime) * 10) "
+    }
+    print("PERF \(report)")
+  }
 }

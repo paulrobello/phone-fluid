@@ -45,6 +45,7 @@ final class Renderer: NSObject {
   // Diagnostics.
   private var frameTimes: [Double] = []
   private(set) var gpuMilliseconds: Double = 0
+  private(set) var simMilliseconds: Double = 0
   private var lastStatsWrite: Double = 0
   private var screenshotTaken = false
   private var lastSteps = 0
@@ -115,6 +116,7 @@ final class Renderer: NSObject {
     do {
       let sim = try FluidSimulation(device: device, library: library, geometry: geometry)
       sim.preset = settings.preset
+      sim.useGather = !launch.scatterP2G
       sim.reset(fill: settings.fill, down: lastGravity)
       simulation = sim
       appliedQuality = settings.quality
@@ -190,14 +192,21 @@ final class Renderer: NSObject {
     if shakeBoost > 0 { addShakeSplashes(sim) }
     shakeBoost = 0
 
-    guard let commandBuffer = queue.makeCommandBuffer() else {
+    guard let simBuffer = queue.makeCommandBuffer(), let commandBuffer = queue.makeCommandBuffer()
+    else {
       frameSemaphore.signal()
       return
     }
-    commandBuffer.label = "Frame"
+    simBuffer.label = "Simulation"
     sim.encode(
-      into: commandBuffer, steps: steps, gravity: sample.gravity,
+      into: simBuffer, steps: steps, gravity: sample.gravity,
       statsBuffer: statsBuffer, statsOffset: slot * MemoryLayout<FrameStats>.stride)
+    simBuffer.addCompletedHandler { [weak self] cb in
+      let ms = (cb.gpuEndTime - cb.gpuStartTime) * 1000
+      Task { @MainActor in self?.simMilliseconds = ms }
+    }
+    simBuffer.commit()
+    commandBuffer.label = "Render"
 
     guard let drawable = view.currentDrawable else {
       commandBuffer.addCompletedHandler { [frameSemaphore] _ in frameSemaphore.signal() }
@@ -318,7 +327,10 @@ final class Renderer: NSObject {
   private func writeStats() {
     let payload: [String: Any] = [
       "fps": fps,
-      "gpuMs": gpuMilliseconds,
+      "renderMs": gpuMilliseconds,
+      "simMs": simMilliseconds,
+      "gather": simulation?.useGather ?? false,
+      "attitude": motion.debugAttitude,
       "particles": simulation?.activeCount ?? 0,
       "stepsPerFrame": lastSteps,
       "quality": settings.quality.rawValue,

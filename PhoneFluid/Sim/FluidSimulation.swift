@@ -29,6 +29,23 @@ final class FluidSimulation {
   private let p2g2Pipeline: MTLComputePipelineState
   private let updateGridPipeline: MTLComputePipelineState
   private let g2pPipeline: MTLComputePipelineState
+  private let clearCountsPipeline: MTLComputePipelineState
+  private let countPipeline: MTLComputePipelineState
+  private let scanPipeline: MTLComputePipelineState
+  private let scatterIndicesPipeline: MTLComputePipelineState
+  private let gatherMassPipeline: MTLComputePipelineState
+  private let stressPipeline: MTLComputePipelineState
+  private let gatherStressPipeline: MTLComputePipelineState
+
+  private let cellCountBuffer: MTLBuffer
+  private let cellStartBuffer: MTLBuffer
+  private let rankBuffer: MTLBuffer
+  private let sortedBuffer: MTLBuffer
+  private let termBuffer: MTLBuffer
+
+  /// Atomic-free P2G (counting sort + per-node gather) instead of float-atomic scatter.
+  var useGather = true
+  private let scanThreads: Int
 
   var preset: FluidPreset = .water
   var touches: [TouchInput] = []
@@ -51,6 +68,22 @@ final class FluidSimulation {
         length: geometry.nodeCount * MemoryLayout<SIMD4<Float>>.stride,
         options: .storageModePrivate)
     else { throw SimulationError.allocationFailed }
+    let uintSize = MemoryLayout<UInt32>.stride
+    guard
+      let counts = device.makeBuffer(
+        length: geometry.nodeCount * uintSize, options: .storageModePrivate),
+      let starts = device.makeBuffer(
+        length: geometry.nodeCount * uintSize, options: .storageModePrivate),
+      let rank = device.makeBuffer(length: capacity * uintSize, options: .storageModePrivate),
+      let sorted = device.makeBuffer(length: capacity * uintSize, options: .storageModePrivate),
+      let terms = device.makeBuffer(
+        length: capacity * MemoryLayout<simd_float3x3>.stride, options: .storageModePrivate)
+    else { throw SimulationError.allocationFailed }
+    cellCountBuffer = counts
+    cellStartBuffer = starts
+    rankBuffer = rank
+    sortedBuffer = sorted
+    termBuffer = terms
     particles.label = "particles"
     grid.label = "grid"
     gridVel.label = "gridVelocity"
@@ -69,6 +102,14 @@ final class FluidSimulation {
     p2g2Pipeline = try pipeline("p2g2")
     updateGridPipeline = try pipeline("updateGrid")
     g2pPipeline = try pipeline("g2p")
+    clearCountsPipeline = try pipeline("clearCounts")
+    countPipeline = try pipeline("countParticles")
+    scanPipeline = try pipeline("scanCounts")
+    scatterIndicesPipeline = try pipeline("scatterIndices")
+    gatherMassPipeline = try pipeline("p2gGatherMass")
+    stressPipeline = try pipeline("particleStress")
+    gatherStressPipeline = try pipeline("p2gGatherStress")
+    scanThreads = min(1024, scanPipeline.maxTotalThreadsPerThreadgroup / 32 * 32)
   }
 
   // MARK: - Particles
@@ -208,19 +249,23 @@ final class FluidSimulation {
           for i in 0..<Int(params.touchCount) { slots[i].velocity.z = 0 }
         }
       }
-      enc.setComputePipelineState(clearPipeline)
-      enc.setBuffer(gridBuffer, offset: 0, index: 0)
-      enc.setBytes(&params, length: paramSize, index: 1)
-      dispatch(enc, clearPipeline, count: nodes)
+      if useGather {
+        encodeGatherP2G(enc, params: &params, nodes: nodes, particles: particles)
+      } else {
+        enc.setComputePipelineState(clearPipeline)
+        enc.setBuffer(gridBuffer, offset: 0, index: 0)
+        enc.setBytes(&params, length: paramSize, index: 1)
+        dispatch(enc, clearPipeline, count: nodes)
 
-      enc.setComputePipelineState(p2g1Pipeline)
-      enc.setBuffer(particleBuffer, offset: 0, index: 0)
-      enc.setBuffer(gridBuffer, offset: 0, index: 1)
-      enc.setBytes(&params, length: paramSize, index: 2)
-      dispatch(enc, p2g1Pipeline, count: particles)
+        enc.setComputePipelineState(p2g1Pipeline)
+        enc.setBuffer(particleBuffer, offset: 0, index: 0)
+        enc.setBuffer(gridBuffer, offset: 0, index: 1)
+        enc.setBytes(&params, length: paramSize, index: 2)
+        dispatch(enc, p2g1Pipeline, count: particles)
 
-      enc.setComputePipelineState(p2g2Pipeline)
-      dispatch(enc, p2g2Pipeline, count: particles)
+        enc.setComputePipelineState(p2g2Pipeline)
+        dispatch(enc, p2g2Pipeline, count: particles)
+      }
 
       enc.setComputePipelineState(updateGridPipeline)
       enc.setBuffer(gridBuffer, offset: 0, index: 0)
@@ -237,6 +282,66 @@ final class FluidSimulation {
       dispatch(enc, g2pPipeline, count: particles)
     }
     enc.endEncoding()
+  }
+
+  private func encodeGatherP2G(
+    _ enc: MTLComputeCommandEncoder, params: inout SimParams, nodes: Int, particles: Int
+  ) {
+    let paramSize = MemoryLayout<SimParams>.stride
+
+    enc.setComputePipelineState(clearCountsPipeline)
+    enc.setBuffer(cellCountBuffer, offset: 0, index: 0)
+    enc.setBytes(&params, length: paramSize, index: 1)
+    dispatch(enc, clearCountsPipeline, count: nodes)
+
+    enc.setComputePipelineState(countPipeline)
+    enc.setBuffer(particleBuffer, offset: 0, index: 0)
+    enc.setBuffer(cellCountBuffer, offset: 0, index: 1)
+    enc.setBuffer(rankBuffer, offset: 0, index: 2)
+    enc.setBytes(&params, length: paramSize, index: 3)
+    dispatch(enc, countPipeline, count: particles)
+
+    enc.setComputePipelineState(scanPipeline)
+    enc.setBuffer(cellCountBuffer, offset: 0, index: 0)
+    enc.setBuffer(cellStartBuffer, offset: 0, index: 1)
+    enc.setBytes(&params, length: paramSize, index: 2)
+    enc.dispatchThreadgroups(
+      MTLSize(width: 1, height: 1, depth: 1),
+      threadsPerThreadgroup: MTLSize(width: scanThreads, height: 1, depth: 1))
+
+    enc.setComputePipelineState(scatterIndicesPipeline)
+    enc.setBuffer(particleBuffer, offset: 0, index: 0)
+    enc.setBuffer(rankBuffer, offset: 0, index: 1)
+    enc.setBuffer(cellStartBuffer, offset: 0, index: 2)
+    enc.setBuffer(sortedBuffer, offset: 0, index: 3)
+    enc.setBytes(&params, length: paramSize, index: 4)
+    dispatch(enc, scatterIndicesPipeline, count: particles)
+
+    enc.setComputePipelineState(gatherMassPipeline)
+    enc.setBuffer(particleBuffer, offset: 0, index: 0)
+    enc.setBuffer(cellStartBuffer, offset: 0, index: 1)
+    enc.setBuffer(cellCountBuffer, offset: 0, index: 2)
+    enc.setBuffer(sortedBuffer, offset: 0, index: 3)
+    enc.setBuffer(gridBuffer, offset: 0, index: 4)
+    enc.setBytes(&params, length: paramSize, index: 5)
+    dispatch(enc, gatherMassPipeline, count: nodes)
+
+    enc.setComputePipelineState(stressPipeline)
+    enc.setBuffer(particleBuffer, offset: 0, index: 0)
+    enc.setBuffer(gridBuffer, offset: 0, index: 1)
+    enc.setBuffer(termBuffer, offset: 0, index: 2)
+    enc.setBytes(&params, length: paramSize, index: 3)
+    dispatch(enc, stressPipeline, count: particles)
+
+    enc.setComputePipelineState(gatherStressPipeline)
+    enc.setBuffer(particleBuffer, offset: 0, index: 0)
+    enc.setBuffer(cellStartBuffer, offset: 0, index: 1)
+    enc.setBuffer(cellCountBuffer, offset: 0, index: 2)
+    enc.setBuffer(sortedBuffer, offset: 0, index: 3)
+    enc.setBuffer(gridBuffer, offset: 0, index: 4)
+    enc.setBytes(&params, length: paramSize, index: 5)
+    enc.setBuffer(termBuffer, offset: 0, index: 6)
+    dispatch(enc, gatherStressPipeline, count: nodes)
   }
 
   private func dispatch(

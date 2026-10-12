@@ -17,6 +17,10 @@ final class MotionController {
 
   static let shakeThreshold: Float = 1.8
 
+  var debugAttitude: [Float] {
+    [attitude.vector.x, attitude.vector.y, attitude.vector.z, attitude.vector.w]
+  }
+
   init(launch: LaunchConfig = .current) {
     override = launch.gravity
     sweep = launch.gravitySweep

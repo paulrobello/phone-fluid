@@ -13,6 +13,8 @@ struct LaunchConfig: Sendable {
   var screenshotAfter: TimeInterval?
   var exitAfter: TimeInterval?
   var writeStats = false
+  /// Use the float-atomic scatter P2G instead of the gather path (A/B timing).
+  var scatterP2G = false
 
   static let current = LaunchConfig(environment: ProcessInfo.processInfo.environment)
 
@@ -25,6 +27,7 @@ struct LaunchConfig: Sendable {
     screenshotAfter = env["FLUID_SCREENSHOT_AFTER"].flatMap(TimeInterval.init)
     exitAfter = env["FLUID_EXIT_AFTER"].flatMap(TimeInterval.init)
     writeStats = Self.flag(env["FLUID_STATS"])
+    scatterP2G = Self.flag(env["FLUID_SCATTER"])
   }
 
   var needsReadableDrawable: Bool { screenshotAfter != nil }
