@@ -124,7 +124,7 @@ final class ARFaceTracker: NSObject, ARSessionDelegate, @unchecked Sendable {
       }
     }
     state.withLock { current in
-      let keepEye = update.eye == nil && frame.timestamp - current.timestamp < 0.25
+      let keepEye = update.eye == nil && frame.timestamp - current.timestamp < 0.05
       let previousEye = current.eye
       current = update
       if keepEye { current.eye = previousEye }

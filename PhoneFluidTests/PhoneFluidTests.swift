@@ -61,6 +61,22 @@ struct InputTests {
     #expect(simd_length(SIMD2<Float>(far.x, far.y)) <= PerspectiveController.maxOffset + 1e-3)
   }
 
+  @Test @MainActor func lostFacePredictionFollowsDeviceRotation() {
+    let q0 = simd_quatf(angle: 0.1, axis: [1, 0, 0])
+    let eye = SIMD3<Float>(20, -10, 300)
+    // No rotation since the face was lost: the head stays where it was seen.
+    let same = PerspectiveController.predictedEye(lastEye: eye, lastAttitude: q0, current: q0)
+    #expect(simd_distance(same, eye) < 1e-3)
+    // Rotating the device matches tilt mode's world-fixed head model.
+    let q1 = q0 * simd_quatf(angle: 0.25, axis: [0, 1, 0])
+    let straight = SIMD3<Float>(0, 0, PerspectiveController.eyeDistance)
+    let predicted = PerspectiveController.predictedEye(
+      lastEye: straight, lastAttitude: q0, current: q1)
+    let tilt = PerspectiveController.tiltEye(reference: q0, current: q1, gain: 1)
+    #expect(abs(predicted.x - tilt.x) < 1e-2 && abs(predicted.y - tilt.y) < 1e-2)
+    #expect(abs(predicted.x) > 50)
+  }
+
   @Test func launchConfigParsesOverrides() {
     let config = LaunchConfig(environment: [
       "FLUID_GRAVITY": "0.5, -1, 0", "FLUID_STATS": "1", "FLUID_PRESET": "honey",

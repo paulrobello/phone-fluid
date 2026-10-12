@@ -360,10 +360,13 @@ final class Renderer: NSObject {
 
   private func updatePerspective(dt: Float) {
     let gain = settings.parallax
-    if settings.perspectiveMode == .face, let face = faceTracker?.snapshot(),
-      let eye = face.eye
+    let attitude = motion.hasAttitude ? motion.attitude : nil
+    if settings.perspectiveMode == .face, let eye = faceTracker?.snapshot().eye {
+      perspective.updateFace(faceEye: eye, attitude: attitude, dt: dt, gain: gain)
+    } else if settings.perspectiveMode == .face, let attitude,
+      perspective.updateFaceLost(attitude: attitude, dt: dt, gain: gain)
     {
-      perspective.updateFace(faceEye: eye, dt: dt, gain: gain)
+      // Head predicted from the device rotation since the face was last seen.
     } else if motion.hasAttitude {
       perspective.updateTilt(attitude: motion.attitude, dt: dt, gain: gain * 1.4)
     }
