@@ -15,6 +15,11 @@ struct FluidPreset: Identifiable, Equatable, Sendable {
   var cohesion: Float = 0.05
   /// Multiplier on device gravity (heavy liquids feel snappier).
   var gravityScale: Float = 1
+  /// Thin-gap (Hele-Shaw) viscous drag, 1/s: a viscous liquid between the close glass walls
+  /// creeps instead of sliding. Water ~0, honey ~150.
+  var drag: Float = 0
+  /// Velocity loss at the walls, 1/s (how much the liquid sticks to the glass).
+  var wallFriction: Float = 0
   /// Sim steps per real second (higher = faster-moving liquid).
   var stepsPerSecond: Float = 1200
 
@@ -44,13 +49,13 @@ struct FluidPreset: Identifiable, Equatable, Sendable {
 
   static let honey = FluidPreset(
     id: "honey", name: "Honey",
-    viscosity: 2.4, cohesion: 0.15, stepsPerSecond: 900,
+    viscosity: 2.4, cohesion: 0.15, drag: 150, wallFriction: 400, stepsPerSecond: 900,
     absorption: [0.04, 0.12, 0.45], tint: [1.0, 0.78, 0.35], opacity: 0.15, refraction: 1.3,
     reflectivity: 0.04, roughness: 0.03, foam: 0, causticStrength: 0.7)
 
   static let oil = FluidPreset(
     id: "oil", name: "Oil",
-    viscosity: 0.9, stepsPerSecond: 1100,
+    viscosity: 0.9, drag: 6, wallFriction: 20, stepsPerSecond: 1100,
     absorption: [0.05, 0.07, 0.25], tint: [0.95, 0.88, 0.45], refraction: 1.2,
     reflectivity: 0.035, roughness: 0.02, foam: 0.1, causticStrength: 0.8)
 
@@ -62,21 +67,21 @@ struct FluidPreset: Identifiable, Equatable, Sendable {
 
   static let lava = FluidPreset(
     id: "lava", name: "Lava",
-    viscosity: 2.8, cohesion: 0.1, stepsPerSecond: 800,
+    viscosity: 2.8, cohesion: 0.1, drag: 220, wallFriction: 500, stepsPerSecond: 800,
     absorption: [0.4, 0.9, 1.4], tint: [0.25, 0.08, 0.04], opacity: 0.9, refraction: 0,
     reflectivity: 0.03, roughness: 0.4, foam: 0, emission: [1.0, 0.32, 0.05],
     emissionStrength: 2.2, causticStrength: 0)
 
   static let slime = FluidPreset(
     id: "slime", name: "Slime",
-    viscosity: 1.6, cohesion: 0.45, stepsPerSecond: 1000,
+    viscosity: 1.6, cohesion: 0.45, drag: 40, wallFriction: 150, stepsPerSecond: 1000,
     absorption: [0.3, 0.03, 0.35], tint: [0.55, 1.0, 0.3], opacity: 0.25, refraction: 1.4,
     reflectivity: 0.05, roughness: 0.02, foam: 0, emission: [0.25, 0.9, 0.1],
     emissionStrength: 0.15, causticStrength: 0.6)
 
   static let milk = FluidPreset(
     id: "milk", name: "Milk",
-    viscosity: 0.45,
+    viscosity: 0.45, drag: 0.5,
     absorption: [0.8, 0.8, 0.8], tint: [0.97, 0.96, 0.92], opacity: 0.92, refraction: 0,
     reflectivity: 0.03, roughness: 0.15, foam: 0.6, causticStrength: 0)
 

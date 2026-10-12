@@ -33,7 +33,8 @@ typedef struct {
     float maxSpeed;
     float wallStiffness;  // soft wall push strength in g2p
     float affineDamping;  // scales the APIC affine matrix C each step (1 = none)
-    float drag;           // fraction of grid velocity removed per step
+    float drag;           // fraction of grid velocity removed per step (thin-gap viscous drag)
+    float wallFriction;   // fraction of velocity removed per step at the walls (stickiness)
     float foamSpeed;      // particle speed where whitewater starts to form
     float foamDecay;      // per-step foam retention
     uint32_t countCells;  // g2p bins particles for the next substep (gather path)

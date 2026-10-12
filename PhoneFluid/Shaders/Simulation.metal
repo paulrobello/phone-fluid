@@ -153,6 +153,9 @@ inline float3 gridNodeVelocity(float4 node, uint id, constant SimParams &p) {
     if (cf.z < lo.z && v.z < 0.0f) v.z = 0.0f;
     if (cf.z > hi.z && v.z > 0.0f) v.z = 0.0f;
 
+    // Viscous liquids cling to the glass: damp motion in the boundary layer.
+    if (any(cf < lo + 1.0f) || any(cf > hi - 1.0f)) v *= 1.0f - p.wallFriction;
+
     float speed = length(v);
     if (speed > p.maxSpeed) v *= p.maxSpeed / speed;
     return v;

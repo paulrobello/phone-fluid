@@ -63,7 +63,6 @@ final class FluidSimulation {
   var useGather = true
   var wallStiffness: Float = 0.3
   var affineDamping: Float = 1
-  var drag: Float = 0
   private let scanThreads: Int
 
   var preset: FluidPreset = .water
@@ -272,7 +271,9 @@ final class FluidSimulation {
     params.maxSpeed = 0.75 / dt
     params.wallStiffness = wallStiffness
     params.affineDamping = affineDamping
-    params.drag = drag
+    // Per-real-second rates → per-step fractions.
+    params.drag = 1 - exp(-preset.drag / stepsPerSecond)
+    params.wallFriction = 1 - exp(-preset.wallFriction / stepsPerSecond)
     params.foamSpeed = preset.foamSpeed
     // Foam half-life ~0.6 s of real time regardless of step rate.
     params.foamDecay = pow(0.5, 1 / (0.6 * stepsPerSecond))

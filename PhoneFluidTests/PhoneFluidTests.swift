@@ -323,4 +323,28 @@ struct SimulationTests {
     // Measured ~16%: whitewater at crests and impacts, not the whole body.
     #expect(sloshing > 0.03 && sloshing < 0.4, "sloshing foam fraction \(sloshing)")
   }
+
+  /// Tips the tank sideways and returns the centroid shift (cells) after `seconds` of real time.
+  private func slump(_ preset: FluidPreset, seconds: Float) throws -> Float {
+    let device = try #require(MTLCreateSystemDefaultDevice())
+    let library = try #require(device.makeDefaultLibrary())
+    let geometry = TankGeometry(widthMM: 66, heightMM: 145, depthMM: 24, quality: .low)
+    let sim = try FluidSimulation(device: device, library: library, geometry: geometry)
+    sim.preset = preset
+    sim.reset(fill: 0.35, down: [0, -1, 0])
+    let x0 = particles(sim).map(\.position.x).reduce(0, +) / Float(sim.activeCount)
+    try run(sim, steps: Int(sim.stepsPerSecond * seconds), gravity: [1, 0, 0])
+    return particles(sim).map(\.position.x).reduce(0, +) / Float(sim.activeCount) - x0
+  }
+
+  @Test func viscousPresetsCreepWhileWaterSloshes() throws {
+    // Measured shifts after 0.5 s: water ~7.8, honey ~2.5, lava ~1.6 (Hele-Shaw drag).
+    let water = try slump(.water, seconds: 0.5)
+    let honey = try slump(.honey, seconds: 0.5)
+    let lava = try slump(.lava, seconds: 0.5)
+    #expect(water > 6)
+    #expect(honey < water * 0.5, "honey \(honey) vs water \(water)")
+    #expect(lava < honey)
+    #expect(try slump(.honey, seconds: 1.5) > honey + 1, "honey should keep flowing")
+  }
 }
