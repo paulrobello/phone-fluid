@@ -72,3 +72,37 @@ claude_scratch/
 .claude/statusline-*
 .pi/status-footer.json
 docs/playgrounds/
+
+# --- Baseline additions (~/.claude/guides/git-ci.md) ---
+# Logs and runtime output
+*.seed
+tmp/
+temp/
+
+# OS and editor noise
+Thumbs.db
+.idea/
+.vscode/
+
+# Agent/tool local state
+.pi/extensions/discord-relay/state.json
+
+# Grind loop (~/Repos/par-grind) — per-machine config and run output, never committed
+.grind.local.json
+.grind-logs/
+.exit-grind
+docs/superpowers/
+
+# Language/build artifacts
+coverage/
+.cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.venv/
+venv/
+node_modules/
+.next/
+.turbo/
+target/
