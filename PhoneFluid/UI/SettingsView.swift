@@ -55,7 +55,7 @@ struct SettingsView: View {
           }
           .pickerStyle(.segmented)
           if settings.quality != .low {
-            Text("Finer liquid, but slower than real time on current iPhones.")
+            Text("Finer liquid at 60 Hz. Uses more power; slows down if the phone gets hot.")
               .font(.footnote)
               .foregroundStyle(.secondary)
           }

@@ -68,7 +68,7 @@ compiler rejects it). Kernels per substep:
 Buffers are allocated at **max capacity**; `activeCount` drives dispatch. Fill level changes
 `activeCount` (spawn new particles as a pour near the top / drop the tail).
 
-Quality presets set cell size: Low 2.6 mm (default; the only preset that holds full simulation speed at 120 fps on iPhone 18 Pro Max), Medium 2.1 mm, High 1.7 mm. Particles are
+Quality presets set cell size: Low 2.6 mm (default, 120 Hz in tilt mode), Medium 2.1 mm and High 1.7 mm (60 Hz). Measured on a cool iPhone 18 Pro Max (2026-10-12): all three hold full real-time speed; 1.5 mm reaches 73% and 1.35 mm 45%, so High sits at the device's real-time limit. Particles are
 seeded at rest density (spacing 0.63 cells, about 4 per cell). The sim uses a fixed dt of 0.2 sim units with gravity 0.04 per g, stiffness 3, Tait exponent 4 and cohesion 0.05 (stiffer settings exceed the acoustic CFL limit and make the resting surface boil); 15% extra particles offset the settled compression; each preset sets steps per second (800–1300), giving about 10 substeps per 120 Hz frame.
 
 Gravity input = `(gravity − userAcceleration) × 9810 mm/s²` mapped to cells/s², times a
