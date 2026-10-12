@@ -216,7 +216,7 @@ final class Renderer: NSObject {
     let uniforms = makeUniforms(sim: sim, viewport: view.drawableSize, time: now - startTime)
     fluidRenderer.encode(
       commandBuffer: commandBuffer, target: drawable.texture, uniforms: uniforms,
-      particles: sim.particleBuffer, particleCount: sim.activeCount)
+      particles: sim.particleBuffer, foam: sim.foamBuffer, particleCount: sim.activeCount)
 
     let wantsScreenshot =
       !screenshotTaken && launch.screenshotAfter.map { now - startTime >= $0 } == true

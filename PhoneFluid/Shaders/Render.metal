@@ -183,13 +183,14 @@ struct SpriteOut {
     float2 uv;
     float3 centerView;
     float radius;
-    float speed;
+    float foam;
 };
 
 vertex SpriteOut particleSprite(uint vid [[vertex_id]], uint iid [[instance_id]],
                                 device const Particle *particles [[buffer(0)]],
                                 constant RenderUniforms &u [[buffer(1)]],
-                                constant float &radiusScale [[buffer(2)]]) {
+                                constant float &radiusScale [[buffer(2)]],
+                                device const float *foam [[buffer(3)]]) {
     const float2 corners[4] = {float2(-1, -1), float2(1, -1), float2(-1, 1), float2(1, 1)};
     float2 c = corners[vid];
     Particle p = particles[iid];
@@ -201,7 +202,7 @@ vertex SpriteOut particleSprite(uint vid [[vertex_id]], uint iid [[instance_id]]
     out.uv = c;
     out.centerView = centerView;
     out.radius = r;
-    out.speed = length(p.velocity);
+    out.foam = foam[iid];
     return out;
 }
 
@@ -227,8 +228,8 @@ fragment float4 particleThickness(SpriteOut in [[stage_in]], constant RenderUnif
     float falloff = exp(-r2 * 2.5f);
     // Normalised so a full column of resting liquid sums to roughly its depth in mm.
     float thickness = in.radius * 0.105f * falloff;
-    float foam = smoothstep(u.foamSpeed, u.foamSpeed * 1.9f, in.speed) * falloff;
-    return float4(thickness, foam, 0.0f, 0.0f);
+    // b accumulates weight so the composite can use the foam *fraction* of the column.
+    return float4(thickness, in.foam * falloff, falloff, 0.0f);
 }
 
 // MARK: - Depth smoothing
@@ -302,7 +303,7 @@ fragment float4 compositeFragment(FullscreenOut in [[stage_in]],
                                   sampler depthSampler [[sampler(1)]]) {
     float2 uv = in.uv;
     float3 sceneColor = scene.sample(linearSampler, uv).rgb;
-    float2 thick = thickTex.sample(linearSampler, uv).rg;
+    float3 thick = thickTex.sample(linearSampler, uv).rgb;
     float depth = depthTex.sample(depthSampler, uv).r;
 
     // Front-glass sheen that slides with the viewpoint.
@@ -337,7 +338,8 @@ fragment float4 compositeFragment(FullscreenOut in [[stage_in]],
     float fresnel = F0 + (1.0f - F0) * pow(1.0f - ndv, 5.0f);
 
     float thickness = thick.r;
-    float foam = saturate(thick.g * u.material.w * 1.4f);
+    float foamFraction = thick.g / max(thick.b, 1e-3f);
+    float foam = smoothstep(0.08f, 0.45f, foamFraction) * saturate(u.material.w);
 
     // Transmission: refract into the liquid and shade the wall the ray lands on.
     float3 refr = refract(-V, N, 1.0f / 1.33f);
@@ -399,6 +401,10 @@ fragment float4 compositeFragment(FullscreenOut in [[stage_in]],
         color += u.emission.rgb * u.emission.w * (1.0f - crust * 0.85f) * (0.35f + core);
     }
 
+    // Break whitewater into bubbly clumps instead of a flat white wash.
+    float bubbles = valueNoise(worldPos * 1.3f + float3(0.0f, u.time * 0.6f, 0.0f));
+    bubbles = 0.45f + 0.55f * smoothstep(0.3f, 0.75f, bubbles);
+    foam *= bubbles;
     float3 foamColor = (u.ambientColor.rgb * 0.7f + u.lightColor.rgb * 0.8f) * 0.95f;
     color = mix(color, foamColor, foam);
 

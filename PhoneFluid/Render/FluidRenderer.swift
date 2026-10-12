@@ -64,7 +64,7 @@ final class FluidRenderer {
     thick.vertexFunction = try fn("particleSprite")
     thick.fragmentFunction = try fn("particleThickness")
     let attachment = thick.colorAttachments[0]!
-    attachment.pixelFormat = .rg16Float
+    attachment.pixelFormat = .rgba16Float
     attachment.isBlendingEnabled = true
     attachment.rgbBlendOperation = .add
     attachment.alphaBlendOperation = .add
@@ -154,12 +154,12 @@ final class FluidRenderer {
     depthBuffer = make(.depth32Float, fw, fh, [.renderTarget], "fluidZ")
     smoothA = make(.r32Float, fw, fh, [.shaderRead, .shaderWrite], "smoothA")
     smoothB = make(.r32Float, fw, fh, [.shaderRead, .shaderWrite], "smoothB")
-    thicknessTexture = make(.rg16Float, fw, fh, [.renderTarget, .shaderRead], "thickness")
+    thicknessTexture = make(.rgba16Float, fw, fh, [.renderTarget, .shaderRead], "thickness")
   }
 
   func encode(
     commandBuffer: MTLCommandBuffer, target: MTLTexture, uniforms: RenderUniforms,
-    particles: MTLBuffer, particleCount: Int
+    particles: MTLBuffer, foam: MTLBuffer, particleCount: Int
   ) {
     ensureTextures(for: CGSize(width: target.width, height: target.height))
     guard let scene = sceneTexture, let depth = depthTexture, let zbuf = depthBuffer,
@@ -202,6 +202,7 @@ final class FluidRenderer {
         enc.setDepthStencilState(depthState)
         var scale: Float = 1
         enc.setVertexBuffer(particles, offset: 0, index: 0)
+        enc.setVertexBuffer(foam, offset: 0, index: 3)
         enc.setVertexBytes(&u, length: uSize, index: 1)
         enc.setVertexBytes(&scale, length: 4, index: 2)
         enc.setFragmentBytes(&u, length: uSize, index: 0)
@@ -225,6 +226,7 @@ final class FluidRenderer {
         enc.setDepthStencilState(noDepthState)
         var scale: Float = 1.6
         enc.setVertexBuffer(particles, offset: 0, index: 0)
+        enc.setVertexBuffer(foam, offset: 0, index: 3)
         enc.setVertexBytes(&u, length: uSize, index: 1)
         enc.setVertexBytes(&scale, length: 4, index: 2)
         enc.setFragmentBytes(&u, length: uSize, index: 0)

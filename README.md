@@ -13,7 +13,7 @@ camera so the screen reads as a window into a deep box.
   slosh audio (muted by the silent switch).
 - **Backdrops:** checkerboard, glass tank, your photo, dark void.
 
-Two-finger tap reveals the settings button.
+Press and hold anywhere (or tap the faint button, top right) to open settings.
 
 ## Build and run
 

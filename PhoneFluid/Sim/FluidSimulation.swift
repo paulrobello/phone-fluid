@@ -45,6 +45,9 @@ final class FluidSimulation {
   private let rankBuffer: MTLBuffer
   private let sortedBuffer: MTLBuffer
   private let termBuffer: MTLBuffer
+  private let densityBuffer: MTLBuffer
+  /// Per-particle whitewater amount 0...1, read by the renderer.
+  let foamBuffer: MTLBuffer
 
   /// Atomic-free P2G (counting sort + per-node gather) instead of float-atomic scatter.
   var useGather = true
@@ -83,8 +86,15 @@ final class FluidSimulation {
       let rank = device.makeBuffer(length: capacity * uintSize, options: .storageModePrivate),
       let sorted = device.makeBuffer(length: capacity * uintSize, options: .storageModePrivate),
       let terms = device.makeBuffer(
-        length: capacity * MemoryLayout<simd_float3x3>.stride, options: .storageModePrivate)
+        length: capacity * MemoryLayout<simd_float3x3>.stride, options: .storageModePrivate),
+      let densities = device.makeBuffer(
+        length: capacity * MemoryLayout<Float>.stride, options: .storageModePrivate),
+      let foam = device.makeBuffer(
+        length: capacity * MemoryLayout<Float>.stride, options: .storageModeShared)
     else { throw SimulationError.allocationFailed }
+    densityBuffer = densities
+    foamBuffer = foam
+    memset(foam.contents(), 0, foam.length)
     cellCountBuffer = counts
     cellStartBuffer = starts
     rankBuffer = rank
@@ -166,6 +176,7 @@ final class FluidSimulation {
       }
     }
     activeCount = n
+    memset(foamBuffer.contents(), 0, foamBuffer.length)
   }
 
   /// Grows or shrinks the particle count toward the fill fraction. New particles pour in from
@@ -195,6 +206,8 @@ final class FluidSimulation {
       ptr[activeCount + i] = Particle(
         position: p, velocity: -upDir * 0.5, c0: .zero, c1: .zero, c2: .zero)
     }
+    let foam = foamBuffer.contents().bindMemory(to: Float.self, capacity: capacity)
+    for i in 0..<add { foam[activeCount + i] = 0 }
     activeCount += add
   }
 
@@ -229,6 +242,8 @@ final class FluidSimulation {
     params.wallStiffness = wallStiffness
     params.affineDamping = affineDamping
     params.drag = drag
+    params.foamSpeed = preset.foamSpeed
+    params.foamDecay = 0.999
     let count = min(touches.count, Int(MAX_TOUCHES))
     params.touchCount = UInt32(count)
     withUnsafeMutableBytes(of: &params.touches) { raw in
@@ -274,6 +289,7 @@ final class FluidSimulation {
         dispatch(enc, p2g1Pipeline, count: particles)
 
         enc.setComputePipelineState(p2g2Pipeline)
+        enc.setBuffer(densityBuffer, offset: 0, index: 3)
         dispatch(enc, p2g2Pipeline, count: particles)
       }
 
@@ -289,6 +305,8 @@ final class FluidSimulation {
       enc.setBytes(&params, length: paramSize, index: 2)
       enc.setBuffer(statsBuffer, offset: statsOffset, index: 3)
       enc.setBuffer(statsBuffer, offset: statsOffset, index: 4)
+      enc.setBuffer(densityBuffer, offset: 0, index: 5)
+      enc.setBuffer(foamBuffer, offset: 0, index: 6)
       dispatch(enc, g2pPipeline, count: particles)
     }
     enc.endEncoding()
@@ -341,6 +359,7 @@ final class FluidSimulation {
     enc.setBuffer(gridBuffer, offset: 0, index: 1)
     enc.setBuffer(termBuffer, offset: 0, index: 2)
     enc.setBytes(&params, length: paramSize, index: 3)
+    enc.setBuffer(densityBuffer, offset: 0, index: 4)
     dispatch(enc, stressPipeline, count: particles)
 
     enc.setComputePipelineState(gatherStressPipeline)

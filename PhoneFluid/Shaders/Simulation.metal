@@ -58,6 +58,7 @@ kernel void p2g1(device const Particle *particles [[buffer(0)]],
 kernel void p2g2(device const Particle *particles [[buffer(0)]],
                  device atomic<float> *grid [[buffer(1)]],
                  constant SimParams &p [[buffer(2)]],
+                 device float *densities [[buffer(3)]],
                  uint id [[thread_position_in_grid]]) {
     if (id >= p.particleCount) return;
     Particle pt = particles[id];
@@ -79,6 +80,7 @@ kernel void p2g2(device const Particle *particles [[buffer(0)]],
         }
     }
     density = max(density, 1e-4f);
+    densities[id] = density;
     float volume = 1.0f / density;
     float pressure = p.stiffness * (pow(density / p.restDensity, p.eosPower) - 1.0f);
     pressure = max(pressure, -p.cohesion * p.stiffness);
@@ -164,6 +166,8 @@ kernel void g2p(device Particle *particles [[buffer(0)]],
                 constant SimParams &p [[buffer(2)]],
                 device atomic<float> *stats [[buffer(3)]],
                 device atomic<uint> *statsBits [[buffer(4)]],
+                device const float *densities [[buffer(5)]],
+                device float *foam [[buffer(6)]],
                 uint id [[thread_position_in_grid]]) {
     if (id >= p.particleCount) return;
     Particle pt = particles[id];
@@ -207,6 +211,16 @@ kernel void g2p(device Particle *particles [[buffer(0)]],
         v *= p.maxSpeed / speed;
         speed = p.maxSpeed;
     }
+
+    // Whitewater: fast flow near the free surface (below rest density), wall impacts, and
+    // isolated spray droplets generate foam that then fades over about a second.
+    float relDensity = densities[id] / p.restDensity;
+    float surface = smoothstep(0.97f, 0.7f, relDensity);
+    float spray = smoothstep(0.45f, 0.2f, relDensity);
+    float fast = smoothstep(p.foamSpeed, p.foamSpeed * 2.0f, speed);
+    float hit = saturate(length(push) * 1.5f) * smoothstep(p.foamSpeed * 0.5f, p.foamSpeed * 1.5f, speed);
+    float generated = saturate(fast * (0.05f + surface) + spray * fast + hit);
+    foam[id] = saturate(foam[id] * p.foamDecay + generated * 0.04f);
 
     pt.position = pos;
     pt.velocity = v;
@@ -343,6 +357,7 @@ kernel void particleStress(device const Particle *particles [[buffer(0)]],
                            device const float4 *grid [[buffer(1)]],
                            device float3x3 *terms [[buffer(2)]],
                            constant SimParams &p [[buffer(3)]],
+                           device float *densities [[buffer(4)]],
                            uint id [[thread_position_in_grid]]) {
     if (id >= p.particleCount) return;
     Particle pt = particles[id];
@@ -362,6 +377,7 @@ kernel void particleStress(device const Particle *particles [[buffer(0)]],
         }
     }
     density = max(density, 1e-4f);
+    densities[id] = density;
     float volume = 1.0f / density;
     float pressure = p.stiffness * (pow(density / p.restDensity, p.eosPower) - 1.0f);
     pressure = max(pressure, -p.cohesion * p.stiffness);

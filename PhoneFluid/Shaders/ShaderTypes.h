@@ -34,6 +34,8 @@ typedef struct {
     float wallStiffness;  // soft wall push strength in g2p
     float affineDamping;  // scales the APIC affine matrix C each step (1 = none)
     float drag;           // fraction of grid velocity removed per step
+    float foamSpeed;      // particle speed where whitewater starts to form
+    float foamDecay;      // per-step foam retention
     uint32_t touchCount;
     TouchInput touches[MAX_TOUCHES];
 } SimParams;

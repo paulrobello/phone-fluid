@@ -60,7 +60,7 @@ struct SettingsView: View {
 
         Section {
           Text(
-            "Tilt to slosh. Drag to stir, tap to splash, shake hard. Two-finger tap shows the controls."
+            "Tilt to slosh. Drag to stir, tap to splash, shake hard. Press and hold anywhere to open settings."
           )
           .font(.footnote)
           .foregroundStyle(.secondary)

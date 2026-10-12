@@ -263,4 +263,23 @@ struct SimulationTests {
     // Measured 0.13-0.18 with the old stiff EOS (visibly boiling surface), ~0.005 now.
     #expect(topVy < 0.02, "surface vertical jitter \(topVy)")
   }
+
+  @Test func foamFormsWhenSloshingAndFadesAtRest() throws {
+    let device = try #require(MTLCreateSystemDefaultDevice())
+    let library = try #require(device.makeDefaultLibrary())
+    let geometry = TankGeometry(widthMM: 72, heightMM: 158, depthMM: 24, quality: .low)
+    let sim = try FluidSimulation(device: device, library: library, geometry: geometry)
+    sim.reset(fill: 0.4, down: [0, -1, 0])
+    func foamyFraction() -> Float {
+      let foam = sim.foamBuffer.contents().bindMemory(to: Float.self, capacity: sim.capacity)
+      let f = UnsafeBufferPointer(start: foam, count: sim.activeCount)
+      return Float(f.filter { $0 > 0.2 }.count) / Float(f.count)
+    }
+    try run(sim, steps: 3000, gravity: [0, -1, 0])
+    #expect(foamyFraction() < 0.01, "resting liquid should carry no foam")
+    try run(sim, steps: 300, gravity: simd_normalize(SIMD3<Float>(1, -0.25, 0)))
+    let sloshing = foamyFraction()
+    // Measured ~16%: whitewater at crests and impacts, not the whole body.
+    #expect(sloshing > 0.03 && sloshing < 0.4, "sloshing foam fraction \(sloshing)")
+  }
 }

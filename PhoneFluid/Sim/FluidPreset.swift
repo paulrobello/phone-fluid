@@ -34,13 +34,13 @@ struct FluidPreset: Identifiable, Equatable, Sendable {
   var emissionStrength: Float = 0
   var causticStrength: Float = 1
   /// Particle speed (cells / sim time) above which foam starts to appear.
-  var foamSpeed: Float = 0.75
+  var foamSpeed: Float = 0.65
 
   static let water = FluidPreset(id: "water", name: "Water")
 
   static let ocean = FluidPreset(
     id: "ocean", name: "Ocean",
-    absorption: [0.16, 0.05, 0.025], tint: [0.55, 0.85, 1.0], foam: 1.4, foamSpeed: 0.6)
+    absorption: [0.16, 0.05, 0.025], tint: [0.55, 0.85, 1.0], foam: 1.4, foamSpeed: 0.5)
 
   static let honey = FluidPreset(
     id: "honey", name: "Honey",

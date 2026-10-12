@@ -11,8 +11,11 @@ struct ContentView: View {
   var body: some View {
     ZStack(alignment: .topTrailing) {
       if let renderer {
-        FluidMetalView(renderer: renderer, onTwoFingerTap: revealControls)
-          .ignoresSafeArea()
+        FluidMetalView(
+          renderer: renderer, onTwoFingerTap: revealControls,
+          onLongPress: { showSettings = true }
+        )
+        .ignoresSafeArea()
       } else {
         Color.black.ignoresSafeArea()
         Text("Metal is unavailable on this device.")
@@ -32,8 +35,8 @@ struct ContentView: View {
       .accessibilityLabel("Settings")
       .padding(.trailing, 18)
       .padding(.top, 8)
-      .opacity(controlsVisible ? 1 : 0)
-      .allowsHitTesting(controlsVisible)
+      // Fades to a faint hint rather than disappearing, so settings stay reachable.
+      .opacity(controlsVisible ? 1 : 0.22)
       .animation(.easeInOut(duration: 0.4), value: controlsVisible)
     }
     .persistentSystemOverlays(.hidden)
