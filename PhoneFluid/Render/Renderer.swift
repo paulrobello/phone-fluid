@@ -46,9 +46,16 @@ final class Renderer: NSObject {
   private var frameTimes: [Double] = []
   private(set) var gpuMilliseconds: Double = 0
   private(set) var simMilliseconds: Double = 0
+  /// Smoothed GPU cost of one simulation substep.
+  private var msPerStep: Double = 0.4
+  private var targetFPS = 120
+  private var stepCap = maxStepsPerFrame
+  private var preferredFPS = 0
+  private var capCheckTime: Double = 0
   private var lastStatsWrite: Double = 0
   private var screenshotTaken = false
   private var lastSteps = 0
+  private var faceHistory: [[String: Any]] = []
 
   init(device: MTLDevice, settings: AppSettings, launch: LaunchConfig = .current) throws {
     guard let queue = device.makeCommandQueue(), let library = device.makeDefaultLibrary(),
@@ -183,7 +190,9 @@ final class Renderer: NSObject {
     stepAccumulator += stepsPerSecond * Float(dt)
     var steps = Int(stepAccumulator)
     stepAccumulator -= Float(steps)
-    steps = min(steps, launch.maxSteps ?? Self.maxStepsPerFrame)
+    steps = min(
+      steps,
+      launch.maxSteps ?? affordableSteps(stepsPerSecond: stepsPerSecond, view: view, now: now))
     lastSteps = steps
     sim.touches = touches.inputs(
       screenSize: screenPoints, geometry: sim.geometry,
@@ -201,9 +210,9 @@ final class Renderer: NSObject {
     sim.encode(
       into: simBuffer, steps: steps, gravity: sample.gravity,
       statsBuffer: statsBuffer, statsOffset: slot * MemoryLayout<FrameStats>.stride)
-    simBuffer.addCompletedHandler { [weak self] cb in
+    simBuffer.addCompletedHandler { [weak self, steps] cb in
       let ms = (cb.gpuEndTime - cb.gpuStartTime) * 1000
-      Task { @MainActor in self?.simMilliseconds = ms }
+      Task { @MainActor in self?.recordSimTime(ms: ms, steps: steps) }
     }
     simBuffer.commit()
     commandBuffer.label = "Render"
@@ -232,6 +241,46 @@ final class Renderer: NSObject {
     commandBuffer.commit()
 
     recordFrame(now: now, dt: dt)
+  }
+
+  private func recordSimTime(ms: Double, steps: Int) {
+    simMilliseconds = ms
+    guard steps > 0, ms > 0 else { return }
+    msPerStep += (ms / Double(steps) - msPerStep) * 0.1
+  }
+
+  /// Keeps the frame rate up. Low quality in tilt mode starts at 120 Hz; head tracking (ARKit
+  /// delivers poses at 60 Hz) and finer qualities run at 60 Hz. Missing the target at 120 Hz
+  /// drops to 60 Hz with the simulation still at full speed; missing it at 60 Hz lowers the
+  /// substep cap, so the liquid runs in slow motion instead of the display stuttering.
+  private func affordableSteps(stepsPerSecond: Float, view: MTKView, now: Double) -> Int {
+    let preferred = settings.quality == .low && settings.perspectiveMode == .tilt ? 120 : 60
+    if preferred != preferredFPS {
+      preferredFPS = preferred
+      targetFPS = preferred
+      stepCap = Self.maxStepsPerFrame * 120 / targetFPS
+      capCheckTime = now
+      frameTimes.removeAll()
+    }
+    if view.preferredFramesPerSecond != targetFPS { view.preferredFramesPerSecond = targetFPS }
+    let maxCap = Self.maxStepsPerFrame * 120 / targetFPS
+    if now - capCheckTime > 0.5, frameTimes.count >= 30 {
+      capCheckTime = now
+      let recent = frameTimes.suffix(30)
+      let achieved = Double(recent.count) / recent.reduce(0, +)
+      if achieved < Double(targetFPS) * 0.9 {
+        if targetFPS == 120 {
+          targetFPS = 60
+          stepCap = Self.maxStepsPerFrame * 2
+          frameTimes.removeAll()
+        } else {
+          stepCap = max(2, stepCap * 4 / 5)
+        }
+      } else if achieved > Double(targetFPS) * 0.97, lastSteps >= stepCap {
+        stepCap = min(maxCap, stepCap + 1)
+      }
+    }
+    return stepCap
   }
 
   private func addShakeSplashes(_ sim: FluidSimulation) {
@@ -324,7 +373,21 @@ final class Renderer: NSObject {
     return Double(frameTimes.count) / frameTimes.reduce(0, +)
   }
 
+  private func faceDiagnosticsPayload() -> [String: Any] {
+    guard let tracker = faceTracker, tracker.running else { return [:] }
+    let d = tracker.takeDiagnostics()
+    return [
+      "frames": d.frames, "tracked": d.trackedFrames, "maxFrameGap": d.maxFrameGap,
+      "maxTrackedGap": d.maxTrackedGap, "format": d.videoFormat,
+    ]
+  }
+
   private func writeStats() {
+    let face = faceDiagnosticsPayload()
+    if !face.isEmpty {
+      faceHistory.append(face)
+      if faceHistory.count > 40 { faceHistory.removeFirst() }
+    }
     let payload: [String: Any] = [
       "fps": fps,
       "renderMs": gpuMilliseconds,
@@ -334,8 +397,12 @@ final class Renderer: NSObject {
       "reference": perspective.debugReference,
       "hasAttitude": motion.hasAttitude,
       "mode": settings.perspectiveMode.rawValue,
+      "faceHistory": faceHistory,
+      "thermal": ProcessInfo.processInfo.thermalState.rawValue,
       "particles": simulation?.activeCount ?? 0,
       "stepsPerFrame": lastSteps,
+      "msPerStep": msPerStep,
+      "targetFPS": targetFPS,
       "quality": settings.quality.rawValue,
       "preset": settings.presetID,
       "grid": simulation.map { g in

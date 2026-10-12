@@ -17,6 +17,8 @@ struct LaunchConfig: Sendable {
   var scatterP2G = false
   /// Caps simulation substeps per frame (profiling).
   var maxSteps: Int?
+  /// Overrides the perspective mode (`tilt` or `face`).
+  var perspective: String?
 
   static let current = LaunchConfig(environment: ProcessInfo.processInfo.environment)
 
@@ -31,6 +33,7 @@ struct LaunchConfig: Sendable {
     writeStats = Self.flag(env["FLUID_STATS"])
     scatterP2G = Self.flag(env["FLUID_SCATTER"])
     maxSteps = env["FLUID_MAX_STEPS"].flatMap { Int($0) }
+    perspective = Self.nonEmpty(env["FLUID_PERSPECTIVE"])
   }
 
   var needsReadableDrawable: Bool { screenshotAfter != nil }

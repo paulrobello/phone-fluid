@@ -14,6 +14,17 @@ struct FaceState: Sendable {
   var lightDirection: SIMD3<Float>?
 }
 
+/// Rolling counters for diagnosing tracking stalls (exposed through stats.json).
+struct FaceDiagnostics: Sendable {
+  var frames = 0
+  var trackedFrames = 0
+  var maxFrameGap: Double = 0
+  var maxTrackedGap: Double = 0
+  var lastFrame: Double = 0
+  var lastTracked: Double = 0
+  var videoFormat = ""
+}
+
 /// Runs ARKit face tracking on its own delegate queue and publishes `FaceState` via a mutex.
 final class ARFaceTracker: NSObject, ARSessionDelegate, @unchecked Sendable {
   static var isSupported: Bool { ARFaceTrackingConfiguration.isSupported }
@@ -25,6 +36,7 @@ final class ARFaceTracker: NSObject, ARSessionDelegate, @unchecked Sendable {
   private let session = ARSession()
   private let queue = DispatchQueue(label: "phonefluid.arkit")
   private let state = Mutex(FaceState())
+  private let diagnostics = Mutex(FaceDiagnostics())
   private(set) var running = false
 
   override init() {
@@ -38,6 +50,19 @@ final class ARFaceTracker: NSObject, ARSessionDelegate, @unchecked Sendable {
     let config = ARFaceTrackingConfiguration()
     config.isLightEstimationEnabled = true
     config.maximumNumberOfTrackedFaces = 1
+    // The lightest 60 fps format leaves the GPU and camera pipeline headroom for the simulation.
+    if let format = ARFaceTrackingConfiguration.supportedVideoFormats
+      .filter({ $0.framesPerSecond >= 60 })
+      .min(by: { $0.imageResolution.width < $1.imageResolution.width })
+    {
+      config.videoFormat = format
+    }
+    let format = config.videoFormat
+    diagnostics.withLock {
+      $0 = FaceDiagnostics()
+      $0.videoFormat =
+        "\(Int(format.imageResolution.width))x\(Int(format.imageResolution.height))@\(format.framesPerSecond)"
+    }
     session.run(config, options: [.resetTracking, .removeExistingAnchors])
     running = true
   }
@@ -50,6 +75,18 @@ final class ARFaceTracker: NSObject, ARSessionDelegate, @unchecked Sendable {
   }
 
   func snapshot() -> FaceState { state.withLock { $0 } }
+
+  /// Returns and resets the rolling counters.
+  func takeDiagnostics() -> FaceDiagnostics {
+    diagnostics.withLock { d in
+      let out = d
+      d.frames = 0
+      d.trackedFrames = 0
+      d.maxFrameGap = 0
+      d.maxTrackedGap = 0
+      return out
+    }
+  }
 
   func session(_ session: ARSession, didUpdate frame: ARFrame) {
     let view = frame.camera.viewMatrix(for: .portrait)
@@ -74,6 +111,18 @@ final class ARFaceTracker: NSObject, ARSessionDelegate, @unchecked Sendable {
         if simd_length(dev) > 1e-3 { update.lightDirection = simd_normalize(dev) }
       }
     }
+    let tracked = update.eye != nil
+    let now = frame.timestamp
+    diagnostics.withLock { d in
+      d.frames += 1
+      if d.lastFrame > 0 { d.maxFrameGap = max(d.maxFrameGap, now - d.lastFrame) }
+      d.lastFrame = now
+      if tracked {
+        d.trackedFrames += 1
+        if d.lastTracked > 0 { d.maxTrackedGap = max(d.maxTrackedGap, now - d.lastTracked) }
+        d.lastTracked = now
+      }
+    }
     state.withLock { current in
       let keepEye = update.eye == nil && frame.timestamp - current.timestamp < 0.25
       let previousEye = current.eye
@@ -84,8 +133,9 @@ final class ARFaceTracker: NSObject, ARSessionDelegate, @unchecked Sendable {
 
   /// Portrait camera view space (metres, camera looks down -z, the user is in front) → device
   /// frame (mm, origin at the screen centre). The front camera faces the user, so "in front of
-  /// the camera" is +z in the device frame; x is mirrored.
+  /// the camera" is +z in the device frame; x keeps its sign (verified on device: negating it
+  /// mirrored the parallax).
   static func deviceFromCameraView(_ v: SIMD3<Float>) -> SIMD3<Float> {
-    SIMD3<Float>(-v.x, v.y, -v.z) * 1000 + cameraOffset
+    SIMD3<Float>(v.x, v.y, -v.z) * 1000 + cameraOffset
   }
 }

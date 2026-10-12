@@ -54,6 +54,11 @@ struct SettingsView: View {
             ForEach(SimQuality.allCases) { Text($0.label).tag($0) }
           }
           .pickerStyle(.segmented)
+          if settings.quality != .low {
+            Text("Finer liquid, but slower than real time on current iPhones.")
+              .font(.footnote)
+              .foregroundStyle(.secondary)
+          }
           Toggle("Haptics", isOn: $settings.hapticsEnabled)
           Toggle("Sound", isOn: $settings.soundEnabled)
         }

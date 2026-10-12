@@ -62,7 +62,9 @@ final class AppSettings {
     backdrop =
       (launch.backdrop ?? defaults.string(forKey: "backdrop")).flatMap(Backdrop.init) ?? .checker
     perspectiveMode =
-      defaults.string(forKey: "perspectiveMode").flatMap(PerspectiveMode.init) ?? .tilt
+      (launch.perspective ?? defaults.string(forKey: "perspectiveMode")).flatMap(
+        PerspectiveMode.init)
+      ?? .tilt
     fill = defaults.object(forKey: "fill") as? Float ?? 0.4
     quality =
       (launch.quality ?? defaults.string(forKey: "quality")).flatMap(SimQuality.init) ?? .low
