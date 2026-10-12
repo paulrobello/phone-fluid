@@ -234,25 +234,31 @@ struct SpriteOut {
     float3 centerView;
     float radius;
     float foam;
+    float thicknessScale;
 };
 
 vertex SpriteOut particleSprite(uint vid [[vertex_id]], uint iid [[instance_id]],
                                 device const Particle *particles [[buffer(0)]],
                                 constant RenderUniforms &u [[buffer(1)]],
                                 constant float &radiusScale [[buffer(2)]],
-                                device const float *foam [[buffer(3)]]) {
+                                device const float *foam [[buffer(3)]],
+                                device const float *density [[buffer(4)]]) {
     const float2 corners[4] = {float2(-1, -1), float2(1, -1), float2(-1, 1), float2(1, 1)};
     float2 c = corners[vid];
     Particle p = particles[iid];
     float3 world = u.simOrigin.xyz + p.position * u.cellMM;
     float3 centerView = (u.viewMatrix * float4(world, 1.0f)).xyz;
-    float r = u.particleRadiusMM * radiusScale;
+    // Sparse particles (thin films, drips) grow so neighbours overlap into a continuous sheet
+    // instead of separate beads; the bulk (at rest density) keeps its size.
+    float sparse = clamp(pow(u.restDensity / max(density[iid], 0.05f), 1.0f / 3.0f), 1.0f, 2.0f);
+    float r = u.particleRadiusMM * radiusScale * sparse;
     SpriteOut out;
     out.position = u.projectionMatrix * float4(centerView + float3(c * r, 0.0f), 1.0f);
     out.uv = c;
     out.centerView = centerView;
     out.radius = r;
     out.foam = foam[iid];
+    out.thicknessScale = 1.0f / sparse;
     return out;
 }
 
@@ -277,7 +283,7 @@ fragment float4 particleThickness(SpriteOut in [[stage_in]], constant RenderUnif
     if (r2 > 1.0f) discard_fragment();
     float falloff = exp(-r2 * 2.5f);
     // Normalised so a full column of resting liquid sums to roughly its depth in mm.
-    float thickness = in.radius * 0.105f * falloff;
+    float thickness = in.radius * 0.105f * falloff * in.thicknessScale;
     // b accumulates weight so the composite can use the foam *fraction* of the column.
     return float4(thickness, in.foam * falloff, falloff, 0.0f);
 }
@@ -298,7 +304,17 @@ kernel void smoothDepth(texture2d<float, access::read> src [[texture(0)]],
     if (gid.x >= size.x || gid.y >= size.y) return;
     float d0 = src.read(gid).r;
     if (d0 <= 0.0f) {
-        dst.write(float4(0.0f), gid);
+        // Bridge gaps between sparse particles (thin films): fill a hole only when liquid lies
+        // on both sides within the kernel, so silhouettes don't grow outward.
+        int reach = max(sp.radius / 2, 2);
+        float before = 0.0f, after = 0.0f;
+        for (int i = 1; i <= reach; i++) {
+            int2 a = int2(gid) - sp.direction * i;
+            int2 b = int2(gid) + sp.direction * i;
+            if (before <= 0.0f && all(a >= 0) && all(a < int2(size))) before = src.read(uint2(a)).r;
+            if (after <= 0.0f && all(b >= 0) && all(b < int2(size))) after = src.read(uint2(b)).r;
+        }
+        dst.write(float4(before > 0.0f && after > 0.0f ? 0.5f * (before + after) : 0.0f), gid);
         return;
     }
     float sigma = float(sp.radius) * 0.5f;
@@ -318,6 +334,25 @@ kernel void smoothDepth(texture2d<float, access::read> src [[texture(0)]],
         wsum += w;
     }
     dst.write(float4(sum / max(wsum, 1e-5f)), gid);
+}
+
+/// Separable Gaussian on the thickness/foam buffer so sparse liquid reads as a continuous sheet.
+kernel void blurThickness(texture2d<float, access::read> src [[texture(0)]],
+                          texture2d<float, access::write> dst [[texture(1)]],
+                          constant SmoothParams &sp [[buffer(0)]],
+                          uint2 gid [[thread_position_in_grid]]) {
+    uint2 size = uint2(src.get_width(), src.get_height());
+    if (gid.x >= size.x || gid.y >= size.y) return;
+    float sigma = max(float(sp.radius) * 0.5f, 1.0f);
+    float4 sum = float4(0.0f);
+    float wsum = 0.0f;
+    for (int i = -sp.radius; i <= sp.radius; i++) {
+        int2 q = clamp(int2(gid) + sp.direction * i, int2(0), int2(size) - 1);
+        float w = exp(-float(i * i) / (2.0f * sigma * sigma));
+        sum += src.read(uint2(q)) * w;
+        wsum += w;
+    }
+    dst.write(sum / wsum, gid);
 }
 
 // MARK: - Composite
@@ -394,11 +429,12 @@ fragment float4 compositeFragment(FullscreenOut in [[stage_in]],
     // Transmission: refract into the liquid and shade the wall the ray lands on.
     // The front of the liquid lies flat against the glass, which barely bends the view; drifting
     // ripples in the refraction normal make the background visibly swim through the water.
-    float rippleTime = u.time * 0.9f;
+    float rippleTime = u.ripplePhase * 0.9f;
     float3 rp = worldPos * 0.22f;
     float2 ripple = float2(valueNoise(rp + float3(0.0f, rippleTime, 0.0f)),
                            valueNoise(rp + float3(5.2f, -rippleTime * 0.8f, 1.3f))) - 0.5f;
-    float3 Nr = normalize(N + float3(ripple * 0.55f, 0.0f));
+    // Still liquid keeps a faint static wobble; motion brings the full drifting ripple.
+    float3 Nr = normalize(N + float3(ripple * (0.12f + 0.43f * u.activity), 0.0f));
     float3 refr = refract(-V, Nr, 1.0f / 1.45f);
     float bend = u.absorption.w;
     float3 tdir = normalize(mix(-V, refr, bend));
@@ -409,7 +445,7 @@ fragment float4 compositeFragment(FullscreenOut in [[stage_in]],
         float3 hit = worldPos + tdir * t;
         behind = shadeWall(hit, wall, u, photo, linearSampler);
         float2 wc = wallCoords(hit, wall) * 0.32f + N.xy * 2.0f;
-        float c = causticPattern(wc, u.time * 1.4f) * u.causticStrength;
+        float c = causticPattern(wc, u.ripplePhase * 1.4f) * u.causticStrength;
         behind += behind * c * u.lightColor.rgb * 1.6f;
     } else {
         behind = sceneColor;

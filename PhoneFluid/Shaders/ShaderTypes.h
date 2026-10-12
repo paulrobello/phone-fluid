@@ -74,6 +74,9 @@ typedef struct {
     uint32_t backdrop;  // 0 checker, 1 glass, 2 photo, 3 void
     float foamSpeed;
     float causticStrength;
+    float activity;     // 0 at rest ... 1 sloshing; scales animated surface effects
+    float ripplePhase;  // accumulated time × activity, drives ripples and caustics
+    float restDensity;  // particles per cell at rest (sprite growth for sparse liquid)
     simd_float4 simOrigin;  // world mm position of sim cell (0,0,0)
 } RenderUniforms;
 

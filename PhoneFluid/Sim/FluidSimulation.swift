@@ -57,7 +57,8 @@ final class FluidSimulation {
   private let cellStartBuffer: MTLBuffer
   private let rankBuffer: MTLBuffer
   private let termBuffer: MTLBuffer
-  private let densityBuffer: MTLBuffer
+  /// Per-particle density from the last substep (same order as `particleBuffer`).
+  let densityBuffer: MTLBuffer
 
   /// Atomic-free P2G (counting sort + per-node gather) instead of float-atomic scatter.
   var useGather = true

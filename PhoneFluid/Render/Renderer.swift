@@ -66,6 +66,8 @@ final class Renderer: NSObject {
   private var centroidHistory: [(time: Double, centroid: SIMD3<Float>)] = []
   /// Resting water drifts 0.03-0.047 (residual sway); creeping honey measures 0.2+.
   static let sleepDrift: Float = 0.08
+  private var activity: Float = 1
+  private var ripplePhase: Float = 0
   private var lastEye = SIMD3<Float>.zero
   private var slotSteps = [Int](repeating: 0, count: maxFramesInFlight)
   private var preferredFPS = 0
@@ -220,6 +222,7 @@ final class Renderer: NSObject {
     updateSleep(gravity: sample.gravity, shook: sample.shook, now: now)
     if asleep { steps = 0 }
     view.preferredFramesPerSecond = displayFPS()
+    updateActivity(dt: Float(dt))
     lastSteps = steps
     slotSteps[slot] = steps
     sim.touches = touches.inputs(
@@ -253,7 +256,8 @@ final class Renderer: NSObject {
     let uniforms = makeUniforms(sim: sim, viewport: view.drawableSize, time: now - startTime)
     fluidRenderer.encode(
       commandBuffer: commandBuffer, target: drawable.texture, uniforms: uniforms,
-      particles: sim.particleBuffer, foam: sim.foamBuffer, particleCount: sim.activeCount)
+      particles: sim.particleBuffer, foam: sim.foamBuffer, density: sim.densityBuffer,
+      particleCount: sim.activeCount)
 
     let wantsScreenshot =
       !screenshotTaken && launch.screenshotAfter.map { now - startTime >= $0 } == true
@@ -318,6 +322,18 @@ final class Renderer: NSObject {
   }
 
   // MARK: - Power
+
+  /// Smoothed 0...1 motion level for animated surface effects (ripples, caustics), so a still
+  /// liquid looks still.
+  private func updateActivity(dt: Float) {
+    let target: Float =
+      asleep
+      ? 0
+      : max(
+        min(max((recentRMSSpeed - 0.06) / 0.2, 0), 1), min(centroidDrift / 0.5, 1))
+    activity += (target - activity) * (1 - exp(-dt / 0.8))
+    ripplePhase += dt * activity
+  }
 
   /// Settled liquid with no input stops simulating and the display drops to 30 Hz; tilting,
   /// touching or shaking wakes it immediately.
@@ -399,6 +415,11 @@ final class Renderer: NSObject {
       "att": [q.x, q.y, q.z, q.w].map { (Double($0) * 1000).rounded() / 1000 },
       "asleep": asleep,
       "hasAtt": motion.hasAttitude,
+      "rms": (Double(recentRMSSpeed) * 1000).rounded() / 1000,
+      "drift": (Double(centroidDrift) * 1000).rounded() / 1000,
+      "g": [lastGravity.x, lastGravity.y, lastGravity.z].map {
+        (Double($0) * 1000).rounded() / 1000
+      },
     ]
     if let e = face?.eye { entry["face"] = [r(e.x), r(e.y), r(e.z)] }
     if let f = face { entry["arT"] = (f.timestamp * 100).rounded() / 100 }
@@ -460,6 +481,9 @@ final class Renderer: NSObject {
     u.backdrop = settings.backdrop.shaderIndex
     u.foamSpeed = preset.foamSpeed
     u.causticStrength = preset.causticStrength
+    u.activity = activity
+    u.restDensity = preset.restDensity
+    u.ripplePhase = ripplePhase
     u.simOrigin = SIMD4<Float>(geo.simOrigin, 0)
     return u
   }
@@ -519,6 +543,7 @@ final class Renderer: NSObject {
       "asleep": asleep,
       "rmsSpeed": recentRMSSpeed,
       "centroidDrift": centroidDrift,
+      "activity": activity,
       "quality": settings.quality.rawValue,
       "preset": settings.presetID,
       "grid": simulation.map { g in

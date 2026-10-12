@@ -20,6 +20,7 @@ final class FluidRenderer {
   private let thicknessPipeline: MTLRenderPipelineState
   private let compositePipeline: MTLRenderPipelineState
   private let smoothPipeline: MTLComputePipelineState
+  private let blurThicknessPipeline: MTLComputePipelineState
   private let depthState: MTLDepthStencilState
   private let noDepthState: MTLDepthStencilState
   private let linearSampler: MTLSamplerState
@@ -31,6 +32,7 @@ final class FluidRenderer {
   private var smoothA: MTLTexture?
   private var smoothB: MTLTexture?
   private var thicknessTexture: MTLTexture?
+  private var thicknessBlurTexture: MTLTexture?
   private(set) var photoTexture: MTLTexture
   private var size: CGSize = .zero
 
@@ -82,6 +84,8 @@ final class FluidRenderer {
     compositePipeline = try device.makeRenderPipelineState(descriptor: composite)
 
     smoothPipeline = try device.makeComputePipelineState(function: try fn("smoothDepth"))
+    blurThicknessPipeline = try device.makeComputePipelineState(
+      function: try fn("blurThickness"))
 
     let ds = MTLDepthStencilDescriptor()
     ds.depthCompareFunction = .less
@@ -155,12 +159,14 @@ final class FluidRenderer {
     smoothA = make(.r32Float, fw, fh, [.shaderRead, .shaderWrite], "smoothA")
     smoothB = make(.r32Float, fw, fh, [.shaderRead, .shaderWrite], "smoothB")
     // Quarter resolution stair-stepped the silhouette (thickness drives the edge alpha).
-    thicknessTexture = make(.rgba16Float, fw, fh, [.renderTarget, .shaderRead], "thickness")
+    thicknessTexture = make(
+      .rgba16Float, fw, fh, [.renderTarget, .shaderRead, .shaderWrite], "thickness")
+    thicknessBlurTexture = make(.rgba16Float, fw, fh, [.shaderRead, .shaderWrite], "thicknessBlur")
   }
 
   func encode(
     commandBuffer: MTLCommandBuffer, target: MTLTexture, uniforms: RenderUniforms,
-    particles: MTLBuffer, foam: MTLBuffer, particleCount: Int
+    particles: MTLBuffer, foam: MTLBuffer, density: MTLBuffer, particleCount: Int
   ) {
     ensureTextures(for: CGSize(width: target.width, height: target.height))
     guard let scene = sceneTexture, let depth = depthTexture, let zbuf = depthBuffer,
@@ -204,6 +210,7 @@ final class FluidRenderer {
         var scale: Float = 1
         enc.setVertexBuffer(particles, offset: 0, index: 0)
         enc.setVertexBuffer(foam, offset: 0, index: 3)
+        enc.setVertexBuffer(density, offset: 0, index: 4)
         enc.setVertexBytes(&u, length: uSize, index: 1)
         enc.setVertexBytes(&scale, length: 4, index: 2)
         enc.setFragmentBytes(&u, length: uSize, index: 0)
@@ -228,6 +235,7 @@ final class FluidRenderer {
         var scale: Float = 1.6
         enc.setVertexBuffer(particles, offset: 0, index: 0)
         enc.setVertexBuffer(foam, offset: 0, index: 3)
+        enc.setVertexBuffer(density, offset: 0, index: 4)
         enc.setVertexBytes(&u, length: uSize, index: 1)
         enc.setVertexBytes(&scale, length: 4, index: 2)
         enc.setFragmentBytes(&u, length: uSize, index: 0)
@@ -261,6 +269,21 @@ final class FluidRenderer {
           enc.setTexture(dst, index: 1)
           enc.setBytes(&sp, length: MemoryLayout<SmoothParams>.stride, index: 0)
           enc.dispatchThreads(grid, threadsPerThreadgroup: group)
+        }
+        // Thickness/foam blur over about one particle radius (H into blur, V back).
+        if let thicknessBlur = thicknessBlurTexture {
+          enc.setComputePipelineState(blurThicknessPipeline)
+          let blurRadius = Int32(min(max(Int(uniforms.particleRadiusMM * pxPerMM), 3), 16))
+          for (src, dst, dir) in [
+            (thickness, thicknessBlur, SIMD2<Int32>(1, 0)),
+            (thicknessBlur, thickness, SIMD2<Int32>(0, 1)),
+          ] {
+            var sp = SmoothParams(direction: dir, radius: blurRadius, depthFalloff: 0)
+            enc.setTexture(src, index: 0)
+            enc.setTexture(dst, index: 1)
+            enc.setBytes(&sp, length: MemoryLayout<SmoothParams>.stride, index: 0)
+            enc.dispatchThreads(grid, threadsPerThreadgroup: group)
+          }
         }
         enc.endEncoding()
       }
