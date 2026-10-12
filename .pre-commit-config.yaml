@@ -1,0 +1,55 @@
+# Pre-commit hooks for PhoneFluid
+# Install:  pre-commit install
+# Run all:  pre-commit run --all-files  (or: make pre-commit)
+
+repos:
+  # Secret scanning (entropy + rule based) over the staged diff.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.0
+    hooks:
+      - id: gitleaks
+
+  # Standard hygiene + private-key detection.
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: detect-private-key
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+        args: ['--maxkb=1500']
+      - id: check-merge-conflict
+      - id: mixed-line-ending
+
+  # Language gates wired to the canonical Make targets.
+  - repo: local
+    hooks:
+      - id: swift-fmt
+        name: make fmt
+        description: Format Swift sources with swift-format
+        entry: make fmt
+        language: system
+        types: [swift]
+        pass_filenames: false
+      - id: swift-lint
+        name: make lint
+        description: Lint Swift sources with swift-format
+        entry: make lint
+        language: system
+        types: [swift]
+        pass_filenames: false
+      - id: swift-build
+        name: make build
+        description: Verify the app builds for the simulator
+        entry: make build
+        language: system
+        types: [swift]
+        pass_filenames: false
+      - id: swift-test
+        name: make test
+        description: Run the unit test bundle
+        entry: make test
+        language: system
+        types: [swift]
+        pass_filenames: false

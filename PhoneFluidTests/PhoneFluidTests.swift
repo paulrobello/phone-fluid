@@ -1,0 +1,199 @@
+import Foundation
+import Metal
+import Testing
+import simd
+
+@testable import PhoneFluid
+
+struct ProjectionTests {
+  @Test func screenCornersMapToNDCCorners() {
+    let eye = SIMD3<Float>(23, -41, 300)
+    let view = OffAxisProjection.view(eye: eye)
+    let proj = OffAxisProjection.projection(
+      eye: eye, screenMin: [-36, -79], screenMax: [36, 79], near: 150, far: 600)
+    for (corner, expected) in [
+      (SIMD3<Float>(-36, -79, 0), SIMD2<Float>(-1, -1)),
+      (SIMD3<Float>(36, 79, 0), SIMD2<Float>(1, 1)),
+      (SIMD3<Float>(36, -79, 0), SIMD2<Float>(1, -1)),
+    ] {
+      let clip = proj * view * SIMD4<Float>(corner, 1)
+      let ndc = SIMD2<Float>(clip.x, clip.y) / clip.w
+      #expect(simd_distance(ndc, expected) < 1e-4)
+    }
+  }
+
+  @Test func depthIncreasesIntoTheTank() {
+    let eye = SIMD3<Float>(0, 0, 320)
+    let mvp =
+      OffAxisProjection.projection(
+        eye: eye, screenMin: [-36, -79], screenMax: [36, 79], near: 160, far: 600)
+      * OffAxisProjection.view(eye: eye)
+    let front = mvp * SIMD4<Float>(0, 0, 0, 1)
+    let back = mvp * SIMD4<Float>(0, 0, -24, 1)
+    let zf = front.z / front.w
+    let zb = back.z / back.w
+    #expect(zf > 0 && zf < 1)
+    #expect(zb > zf && zb < 1)
+  }
+}
+
+struct InputTests {
+  @Test func effectiveGravitySubtractsUserAcceleration() {
+    let g = MotionController.effectiveGravity(gravity: [0, -1, 0], user: [0, 0.5, 0])
+    #expect(simd_distance(g, [0, -1.5, 0]) < 1e-6)
+    let clamped = MotionController.effectiveGravity(gravity: [0, -1, 0], user: [0, 9, 0])
+    #expect(abs(simd_length(clamped) - 3) < 1e-4)
+  }
+
+  @Test @MainActor func tiltEyeIsCentredAtReference() {
+    let q = simd_quatf(angle: 0.3, axis: simd_normalize(SIMD3<Float>(1, 0.2, 0)))
+    let eye = PerspectiveController.tiltEye(reference: q, current: q, gain: 1)
+    #expect(simd_distance(eye, [0, 0, PerspectiveController.eyeDistance]) < 1e-3)
+  }
+
+  @Test @MainActor func tiltingShiftsEyeAndClampsOffset() {
+    let ref = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+    let tilted = simd_quatf(angle: 0.2, axis: [0, 1, 0])
+    let eye = PerspectiveController.tiltEye(reference: ref, current: tilted, gain: 1)
+    #expect(abs(eye.x) > 30)
+    let extreme = simd_quatf(angle: 1.2, axis: [0, 1, 0])
+    let far = PerspectiveController.tiltEye(reference: ref, current: extreme, gain: 3)
+    #expect(simd_length(SIMD2<Float>(far.x, far.y)) <= PerspectiveController.maxOffset + 1e-3)
+  }
+
+  @Test func launchConfigParsesOverrides() {
+    let config = LaunchConfig(environment: [
+      "FLUID_GRAVITY": "0.5, -1, 0", "FLUID_STATS": "1", "FLUID_PRESET": "honey",
+      "FLUID_EXIT_AFTER": "4",
+    ])
+    #expect(config.gravity == SIMD3<Float>(0.5, -1, 0))
+    #expect(config.writeStats)
+    #expect(config.preset == "honey")
+    #expect(config.exitAfter == 4)
+    #expect(LaunchConfig(environment: ["FLUID_GRAVITY": "bad"]).gravity == nil)
+  }
+
+  @Test func colourTemperatureIsWarmToCool() {
+    let warm = LightEstimator.rgb(kelvin: 2700)
+    let cool = LightEstimator.rgb(kelvin: 9000)
+    let neutral = LightEstimator.rgb(kelvin: 6500)
+    #expect(warm.x > warm.z)
+    #expect(cool.z > cool.x)
+    #expect(abs(neutral.x - neutral.z) < 0.08)
+  }
+
+  @Test func faceCameraMappingPutsUserInFront() {
+    // A face 30 cm in front of the camera, centred: camera view z = -0.3 m.
+    let eye = ARFaceTracker.deviceFromCameraView([0, 0, -0.3])
+    #expect(eye.z > 290)
+    #expect(abs(eye.x) < 1e-3)
+  }
+}
+
+struct PresetTests {
+  @Test func presetsAreUniqueAndPhysical() {
+    let ids = Set(FluidPreset.all.map(\.id))
+    #expect(ids.count == FluidPreset.all.count)
+    for p in FluidPreset.all {
+      #expect(p.restDensity > 0 && p.stiffness > 0 && p.viscosity >= 0)
+      #expect(p.cohesion >= 0 && p.cohesion < 1)
+      #expect(p.stepsPerSecond >= 120)
+    }
+    #expect(FluidPreset.named("HONEY").id == "honey")
+    #expect(FluidPreset.named("nope").id == "water")
+    #expect(FluidPreset.honey.viscosity > FluidPreset.water.viscosity * 5)
+  }
+
+  @Test func tankGeometryMatchesScreen() {
+    let geo = TankGeometry(screenPoints: [440, 956], quality: .medium)
+    #expect(abs(geo.widthMM - 440 * TankGeometry.mmPerPoint) < 1e-3)
+    #expect(geo.gridSize.x == UInt32(geo.interior.x + 2 * TankGeometry.wallMargin))
+    let p = SIMD3<Float>(10, 20, 5)
+    #expect(simd_distance(geo.simFromWorld(geo.worldFromSim(p)), p) < 1e-3)
+    #expect(simd_distance(geo.worldFromSim([2, 2, 2]), geo.boxMin) < 1e-3)
+  }
+}
+
+@MainActor
+struct SimulationTests {
+  private func makeSim(preset: FluidPreset = .water) throws -> FluidSimulation {
+    let device = try #require(MTLCreateSystemDefaultDevice())
+    let library = try #require(device.makeDefaultLibrary())
+    let geometry = TankGeometry(widthMM: 40, heightMM: 60, depthMM: 16, quality: .low)
+    let sim = try FluidSimulation(device: device, library: library, geometry: geometry)
+    sim.preset = preset
+    return sim
+  }
+
+  private func run(_ sim: FluidSimulation, steps: Int, gravity: SIMD3<Float>) throws {
+    let device = sim.device
+    let queue = try #require(device.makeCommandQueue())
+    let stats = try #require(
+      device.makeBuffer(length: MemoryLayout<FrameStats>.stride, options: .storageModeShared))
+    var remaining = steps
+    while remaining > 0 {
+      let batch = min(remaining, 25)
+      let cb = try #require(queue.makeCommandBuffer())
+      sim.encode(into: cb, steps: batch, gravity: gravity, statsBuffer: stats, statsOffset: 0)
+      cb.commit()
+      cb.waitUntilCompleted()
+      #expect(cb.error == nil)
+      remaining -= batch
+    }
+  }
+
+  private func particles(_ sim: FluidSimulation) -> [Particle] {
+    let ptr = sim.particleBuffer.contents().bindMemory(to: Particle.self, capacity: sim.capacity)
+    return Array(UnsafeBufferPointer(start: ptr, count: sim.activeCount))
+  }
+
+  private func centroid(_ ps: [Particle]) -> SIMD3<Float> {
+    ps.reduce(SIMD3<Float>.zero) { $0 + $1.position } / Float(ps.count)
+  }
+
+  @Test func fluidStaysFiniteBoundedAndFlowsDownhill() throws {
+    for preset in [FluidPreset.water, .honey, .mercury] {
+      let sim = try makeSim(preset: preset)
+      sim.reset(fill: 0.3, down: [0, -1, 0])
+      let count = sim.activeCount
+      #expect(count > 1000)
+      let before = centroid(particles(sim))
+
+      try run(sim, steps: 1500, gravity: simd_normalize(SIMD3<Float>(1, -0.6, 0)))
+
+      let after = particles(sim)
+      #expect(sim.activeCount == count)
+      let size = SIMD3<Float>(sim.geometry.gridSize)
+      for p in after {
+        #expect(p.position.x.isFinite && p.position.y.isFinite && p.position.z.isFinite)
+        #expect(all(p.position .>= SIMD3<Float>(repeating: 1)))
+        #expect(all(p.position .<= size - 2))
+      }
+      let c = centroid(after)
+      #expect(c.x > before.x + 1, "\(preset.name) should flow toward +x")
+    }
+  }
+
+  @Test func restingWaterDoesNotCollapse() throws {
+    let sim = try makeSim()
+    sim.reset(fill: 0.3, down: [0, -1, 0])
+    let top0 = particles(sim).map(\.position.y).max() ?? 0
+    try run(sim, steps: 2000, gravity: [0, -1, 0])
+    let ps = particles(sim)
+    let top = ps.map(\.position.y).sorted()[Int(Double(ps.count) * 0.98)]
+    // Incompressible-ish: the surface should stay near its seeded height.
+    #expect(top > top0 * 0.8, "top0=\(top0) top=\(top) ")
+    #expect(top < top0 * 1.15)
+  }
+
+  @Test func fillLevelChangesParticleCount() throws {
+    let sim = try makeSim()
+    sim.reset(fill: 0.3)
+    let base = sim.activeCount
+    sim.setFill(0.1, up: [0, 1, 0])
+    #expect(sim.activeCount < base)
+    sim.setFill(0.3, up: [0, 1, 0])
+    #expect(sim.activeCount > sim.particleCount(forFill: 0.1))
+    #expect(sim.activeCount <= sim.capacity)
+  }
+}

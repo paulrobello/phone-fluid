@@ -1,0 +1,74 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+
+# XcodeGen output (generated from project.yml; regenerate with `make project`)
+/PhoneFluid.xcodeproj/
+
+# Xcode local state
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcworkspace/xcuserdata/
+*.xcworkspace/xcshareddata/swpm/
+xcuserdata/
+*.xcuserdatad/
+*.xcuserstate
+*.xcscmblueprint
+*.xccheckout
+*.moved-aside
+DerivedData/
+*.hmap
+
+# Build, archive, and test products
+/build/
+/.build/
+/dist/
+*.app
+*.appex
+*.ipa
+*.pkg
+*.dmg
+*.xcresult
+*.dSYM/
+*.dSYM.zip
+
+# Swift Package Manager
+/.swiftpm/
+Packages/
+Package.pins
+Package.resolved
+
+# App Store Connect local credentials
+AuthKey_*.p8
+private_keys/
+.appstoreconnect/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.local
+*.local.*
+*-mcp.json
+
+# Logs and temporary files
+*.log
+*.pid
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# Agent/tool local state
+.superpowers/
+.gemini/
+.gemini-clipboard/
+claude_scratch/
+.claude/.cc2cc-session-id
+.claude/scheduled_tasks.lock
+.claude/statusline-*
+.pi/status-footer.json
+docs/playgrounds/

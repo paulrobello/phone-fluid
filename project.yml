@@ -1,0 +1,70 @@
+name: PhoneFluid
+options:
+  bundleIdPrefix: com.paulrobello
+  deploymentTarget:
+    iOS: "26.0"
+  xcodeVersion: "27.0"
+  generateEmptyDirectories: true
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    DEVELOPMENT_TEAM: "QMLVG482FY"
+    CODE_SIGN_STYLE: Automatic
+
+targets:
+  PhoneFluid:
+    type: application
+    platform: iOS
+    sources:
+      - path: PhoneFluid
+        excludes:
+          - "Support/Info.plist"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.paulrobello.PhoneFluid
+        PRODUCT_NAME: PhoneFluid
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        GENERATE_INFOPLIST_FILE: true
+        INFOPLIST_FILE: PhoneFluid/Support/Info.plist
+        INFOPLIST_KEY_CFBundleDisplayName: Fluid
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: false
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: true
+        INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: true
+        INFOPLIST_KEY_UILaunchScreen_Generation: true
+        INFOPLIST_KEY_UIStatusBarHidden: true
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: UIInterfaceOrientationPortrait
+        INFOPLIST_KEY_NSCameraUsageDescription: "Head tracking and ambient light matching use the front camera to shift the 3D perspective and light the fluid like your surroundings."
+        INFOPLIST_KEY_NSPhotoLibraryUsageDescription: "Choose a photo to use as the back wall of the tank."
+        TARGETED_DEVICE_FAMILY: "1"
+        SWIFT_OBJC_BRIDGING_HEADER: PhoneFluid/Shaders/ShaderTypes.h
+        MTL_LANGUAGE_REVISION: Metal31
+        MTL_FAST_MATH: YES
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+
+  PhoneFluidTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - PhoneFluidTests
+    dependencies:
+      - target: PhoneFluid
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.paulrobello.PhoneFluidTests
+        GENERATE_INFOPLIST_FILE: true
+        SWIFT_OBJC_BRIDGING_HEADER: PhoneFluid/Shaders/ShaderTypes.h
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+
+schemes:
+  PhoneFluid:
+    build:
+      targets:
+        PhoneFluid: all
+        PhoneFluidTests: [test]
+    test:
+      targets:
+        - PhoneFluidTests
